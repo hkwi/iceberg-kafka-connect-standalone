@@ -50,6 +50,7 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.data.ConnectorMetrics;
 import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
@@ -84,6 +85,7 @@ class Coordinator extends Channel {
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
   private final CommitState commitState;
+  private final ConnectorMetrics metrics;
   private final AtomicLong partialCommitFailures = new AtomicLong();
   private int consecutiveCommitFailures;
   private volatile boolean terminated;
@@ -95,6 +97,16 @@ class Coordinator extends Channel {
       Collection<MemberDescription> members,
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
+    this(catalog, config, members, clientFactory, context, ConnectorMetrics.NOOP);
+  }
+
+  Coordinator(
+      Catalog catalog,
+      IcebergSinkConfig config,
+      Collection<MemberDescription> members,
+      KafkaClientFactory clientFactory,
+      SinkTaskContext context,
+      ConnectorMetrics metrics) {
     // pass consumer group ID to which we commit low watermark offsets
     super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
 
@@ -117,6 +129,7 @@ class Coordinator extends Channel {
                 .setNameFormat("iceberg-committer-" + config.connectorName() + "-%d")
                 .build());
     this.commitState = new CommitState(config);
+    this.metrics = metrics;
     this.taskId = config.connectorName() + "-" + config.taskId();
   }
 
@@ -133,6 +146,7 @@ class Coordinator extends Channel {
     consumeAvailable(POLL_DURATION);
 
     if (commitState.isCommitTimedOut()) {
+      metrics.commitTimedOut();
       commit(true);
     }
   }
@@ -154,12 +168,16 @@ class Coordinator extends Channel {
   }
 
   private void commit(boolean partialCommit) {
+    long startMs = System.currentTimeMillis();
+    metrics.commitStarted();
     try {
       doCommit(partialCommit);
+      metrics.commitSucceeded(System.currentTimeMillis() - startMs);
       if (!partialCommit) {
         consecutiveCommitFailures = 0;
       }
     } catch (RuntimeException e) {
+      metrics.commitFailed(System.currentTimeMillis() - startMs);
       if (partialCommit) {
         partialCommitFailures.incrementAndGet();
         LOG.warn(

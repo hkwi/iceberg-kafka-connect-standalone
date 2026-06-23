@@ -724,3 +724,37 @@ Refresh procedure if #16658 receives more commits before merge:
 
 When #16658 is merged into upstream main, run `scripts/sync-upstream.sh`, verify the transform diff
 is empty or only from still-local overlays, and drop or refresh this local commit/entry.
+
+
+## apache/iceberg#15961: Connector metrics instrumentation
+
+- PR: https://github.com/apache/iceberg/pull/15961
+- Captured PR head commit: 7d67d58afc817b0bf45a90aa04a6dcdf379d5935
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay adds a `ConnectorMetrics` facade and counter-only metrics for the Kafka Connect sink
+write and commit pipeline. It tracks received and written records, conversion errors, commit
+start/success/failure, commit timeouts, written data/delete files, active writers, schema evolution,
+and table auto-create events. The facade is intentionally backend-neutral so a future Kafka Connect
+`PluginMetrics` integration can be added in one place.
+
+The standalone integration differs from the raw PR because local overlays have moved writer ownership
+behind `RecordRouter` and added DLQ handling, async worker polling, bounded commit retry, and
+per-commitId grouping. Metrics are therefore wired through `CommitterImpl` into both the `Worker`
+side (`SinkWriter`/`RecordRouter`/`IcebergWriterFactory`/`IcebergWriter`) and the coordinator side
+(`Coordinator`). Existing constructors delegate to `ConnectorMetrics.NOOP` to keep tests, custom
+routers, and direct unit construction compatible.
+
+Refresh procedure if #15961 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #15961 and compare its metrics facade and instrumentation points against this adapted
+   overlay.
+3. Preserve local routing, DLQ, #16084 async polling, #16434 bounded retry, and #15651/#15710
+   commit grouping while refreshing metrics call sites.
+4. Run `TestConnectorMetrics`, focused writer/coordinator tests, and
+   `./gradlew -q :iceberg-kafka-connect:test`.
+5. Amend or replace the standalone #15961 overlay commit.
+
+When #15961 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream metrics
+semantics against this adapted overlay, and drop or refresh this local commit/entry accordingly.

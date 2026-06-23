@@ -40,17 +40,23 @@ public class SinkWriter {
   private static final Logger LOG = LoggerFactory.getLogger(SinkWriter.class);
 
   private final IcebergSinkConfig config;
+  private final ConnectorMetrics metrics;
   private final Map<TopicPartition, Offset> sourceOffsets;
   private final RecordRouter router;
   private ErrantRecordReporter reporter;
 
   public SinkWriter(Catalog catalog, IcebergSinkConfig config) {
+    this(catalog, config, ConnectorMetrics.NOOP);
+  }
+
+  public SinkWriter(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
     this.config = config;
+    this.metrics = metrics;
     this.sourceOffsets = Maps.newHashMap();
     if (config.dynamicTablesEnabled()) {
-      router = new RecordRouter.DynamicRecordRouter(catalog, config);
+      router = new RecordRouter.DynamicRecordRouter(catalog, config, metrics);
     } else if (config.tablesRouteWith() == null && config.tablesRouteField() != null) {
-      router = new RecordRouter.StaticRecordRouter(catalog, config);
+      router = new RecordRouter.StaticRecordRouter(catalog, config, metrics);
     } else if (config.tablesRouteWith() != null) {
       try {
         router =
@@ -66,8 +72,9 @@ public class SinkWriter {
             "Cannot create router from iceberg.tables.route-with", e);
       }
     } else {
-      router = new RecordRouter.AllTablesRecordRouter(catalog, config);
+      router = new RecordRouter.AllTablesRecordRouter(catalog, config, metrics);
     }
+    metrics.registerActiveWriters(router::activeWriterCount);
   }
 
   public void setReporter(ErrantRecordReporter reporter) {
@@ -90,6 +97,7 @@ public class SinkWriter {
   }
 
   public void save(Collection<SinkRecord> sinkRecords) {
+    metrics.recordsReceived(sinkRecords.size());
     for (SinkRecord record : sinkRecords) {
       try {
         this.save(record);

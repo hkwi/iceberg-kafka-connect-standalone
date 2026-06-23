@@ -42,8 +42,12 @@ public abstract class RecordRouter {
   private final Map<String, RecordWriter> writers = Maps.newHashMap();
 
   public RecordRouter(Catalog catalog, IcebergSinkConfig config) {
+    this(catalog, config, ConnectorMetrics.NOOP);
+  }
+
+  public RecordRouter(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
     this.config = config;
-    this.writerFactory = new IcebergWriterFactory(catalog, config);
+    this.writerFactory = new IcebergWriterFactory(catalog, config, metrics);
   }
 
   /**
@@ -104,10 +108,19 @@ public abstract class RecordRouter {
     writers.clear();
   }
 
+  int activeWriterCount() {
+    return writers.size();
+  }
+
   /** Route record to all the tables */
   public static class AllTablesRecordRouter extends RecordRouter {
     public AllTablesRecordRouter(Catalog catalog, IcebergSinkConfig config) {
       super(catalog, config);
+    }
+
+    public AllTablesRecordRouter(
+        Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
+      super(catalog, config, metrics);
     }
 
     @Override
@@ -122,7 +135,12 @@ public abstract class RecordRouter {
     private final Map<String, Pattern> tablePatterns = Maps.newHashMap();
 
     public StaticRecordRouter(Catalog catalog, IcebergSinkConfig config) {
-      super(catalog, config);
+      this(catalog, config, ConnectorMetrics.NOOP);
+    }
+
+    public StaticRecordRouter(
+        Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
+      super(catalog, config, metrics);
       this.routeField = config.tablesRouteField();
       Preconditions.checkNotNull(routeField, "Route field cannot be null with static routing");
       config
@@ -151,7 +169,12 @@ public abstract class RecordRouter {
     private final String routeField;
 
     public DynamicRecordRouter(Catalog catalog, IcebergSinkConfig config) {
-      super(catalog, config);
+      this(catalog, config, ConnectorMetrics.NOOP);
+    }
+
+    public DynamicRecordRouter(
+        Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
+      super(catalog, config, metrics);
       routeField = config.tablesRouteField();
       Preconditions.checkNotNull(routeField, "Route field cannot be null with dynamic routing");
     }
@@ -172,6 +195,10 @@ public abstract class RecordRouter {
 
     public TopicRecordRouter(Catalog catalog, IcebergSinkConfig config) {
       super(catalog, config);
+    }
+
+    public TopicRecordRouter(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
+      super(catalog, config, metrics);
     }
 
     private List<String> tablesForTopic(String topic) {

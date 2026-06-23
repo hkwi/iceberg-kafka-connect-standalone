@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.data.ConnectorMetrics;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
@@ -46,6 +47,7 @@ public class CommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
+  private ConnectorMetrics metrics = ConnectorMetrics.NOOP;
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
   private String taskId;
@@ -59,6 +61,7 @@ public class CommitterImpl implements Committer {
       this.config = icebergSinkConfig;
       this.context = sinkTaskContext;
       this.clientFactory = new KafkaClientFactory(config.kafkaProps());
+      this.metrics = ConnectorMetrics.create(sinkTaskContext);
       this.taskId = config.connectorName() + "-" + config.taskId();
     }
   }
@@ -187,6 +190,9 @@ public class CommitterImpl implements Committer {
       } catch (RuntimeException e) {
         failure = Channel.appendFailure(failure, e);
         LOG.warn("Committer {} failed to stop coordinator", taskId, e);
+      } finally {
+        metrics.close();
+        metrics = ConnectorMetrics.NOOP;
       }
       if (failure != null) {
         throw failure;
@@ -266,7 +272,7 @@ public class CommitterImpl implements Committer {
   private void startWorker() {
     if (null == this.worker) {
       LOG.info("Starting commit worker {}", taskId);
-      SinkWriter sinkWriter = new SinkWriter(catalog, config);
+      SinkWriter sinkWriter = new SinkWriter(catalog, config, metrics);
       sinkWriter.setReporter(context.errantRecordReporter());
       worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
@@ -277,7 +283,8 @@ public class CommitterImpl implements Committer {
     if (null == this.coordinatorThread) {
       LOG.info("Task {} elected leader, starting commit coordinator", taskId);
       Coordinator coordinator =
-          new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
+          new Coordinator(
+              catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context, metrics);
       coordinatorThread = new CoordinatorThread(coordinator, config.connectorName());
       coordinatorThread.start();
     }

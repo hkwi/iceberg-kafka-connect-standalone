@@ -177,6 +177,37 @@ public class TestSinkWriter {
   }
 
   @Test
+  public void testMetricsTrackReceivedRecordsAndActiveWriters() {
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
+    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
+
+    ConnectorMetrics metrics = ConnectorMetrics.create(null);
+    SinkWriter sinkWriter = new SinkWriter(catalog, config, metrics);
+
+    SinkRecord rec =
+        new SinkRecord(
+            "topic",
+            1,
+            null,
+            "key",
+            null,
+            ImmutableMap.of("id", 1L, "data", "value"),
+            100L);
+
+    sinkWriter.save(ImmutableList.of(rec));
+
+    assertThat(metrics.recordsReceivedTotal()).isEqualTo(1);
+    assertThat(metrics.recordsWrittenTotal()).isEqualTo(1);
+    assertThat(metrics.activeWriters()).isEqualTo(1);
+
+    SinkWriterResult result = sinkWriter.completeWrite();
+
+    assertThat(result.writerResults()).hasSize(1);
+    assertThat(metrics.activeWriters()).isEqualTo(0);
+  }
+
+  @Test
   public void testOffsetTrackedByOriginalTopicPartition() {
     IcebergSinkConfig config = mock(IcebergSinkConfig.class);
     when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
