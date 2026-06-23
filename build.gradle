@@ -27,8 +27,12 @@ ext {
   hadoopVersion = '3.4.3'
   hiveVersion = '2.3.10'
   httpClientVersion = '5.6.1'
+  assertjVersion = '3.27.7'
   jacksonVersion = '2.22.0'
+  junitVersion = '5.14.4'
+  junitPlatformVersion = '1.14.4'
   kafkaVersion = '3.9.2'
+  mockitoVersion = '4.11.0'
   slf4jVersion = '2.0.18'
   testcontainersVersion = '2.0.5'
 }
@@ -38,8 +42,8 @@ allprojects {
   version = icebergVersion
 
   repositories {
-    mavenLocal()
     mavenCentral()
+    mavenLocal()
   }
 }
 
@@ -72,6 +76,13 @@ subprojects {
         force 'io.grpc:grpc-netty-shaded:1.82.0'
       }
     }
+  }
+
+  dependencies {
+    testImplementation "org.assertj:assertj-core:${assertjVersion}"
+    testImplementation "org.junit.jupiter:junit-jupiter:${junitVersion}"
+    testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher:${junitPlatformVersion}"
   }
 
   tasks.withType(Test).configureEach {
