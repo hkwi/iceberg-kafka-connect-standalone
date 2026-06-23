@@ -34,9 +34,11 @@ public class TestCoordinatorThread {
   @Test
   public void testRun() {
     Coordinator coordinator = mock(Coordinator.class);
-    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator);
+    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator, "test-connector");
 
     coordinatorThread.start();
+
+    assertThat(coordinatorThread.getName()).isEqualTo("iceberg-coord-test-connector");
 
     verify(coordinator, timeout(1000)).start();
     verify(coordinator, timeout(1000).atLeast(1)).process();
@@ -62,7 +64,7 @@ public class TestCoordinatorThread {
             })
         .when(coordinator)
         .stop();
-    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator);
+    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator, "test-connector");
     coordinatorThread.start();
 
     verify(coordinator, timeout(1000)).start();

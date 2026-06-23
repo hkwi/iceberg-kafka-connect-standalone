@@ -449,3 +449,35 @@ When #16681 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, ensure the
 runtime uses Iceberg artifacts containing the core Avro changes, and drop or
 refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16355: Connector names in coordinator and committer threads
+
+- PR: https://github.com/apache/iceberg/pull/16355
+- Captured PR head commit: 5745df1d5556a292ccbaabdef267e91978aa2591
+- Local Apache checkout commit: 66a1a3dbb Kafka Connect: Apply connector thread names from PR #16355
+- Standalone handling: one channel overlay commit on top of the existing local overlay stack
+
+This overlay includes the connector name in background thread names so logs from
+workers running multiple connectors can identify the responsible connector. The
+coordinator thread is named `iceberg-coord-<connectorName>`, and the coordinator
+committer pool uses `iceberg-committer-<connectorName>-%d`.
+
+The standalone integration preserves existing local channel overlays while applying this PR:
+
+1. `CoordinatorThread.terminate()` keeps #16843 synchronous shutdown and failure aggregation.
+2. `CommitterImpl.startWorker()` keeps #14618 errant-record reporter setup.
+3. `CommitterImpl.processControlEvents()` keeps #16366 retriable rebalance handling.
+4. `Coordinator` keeps #16360 control-topic reset recovery and #16434 bounded commit retry logic.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16355-thread-names` commit from the latest PR diff.
+3. Re-apply the channel source and test changes on top of the existing standalone overlays,
+   preserving the four integration points listed above.
+4. Run the channel tests plus `TestChannelRetry` to verify the retry overlay remains intact.
+5. Amend or replace the standalone #16355 overlay commit.
+
+When #16355 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.

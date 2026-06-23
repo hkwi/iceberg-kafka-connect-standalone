@@ -129,7 +129,7 @@ public class TestCommitterImpl {
     Coordinator coordinator = mock(Coordinator.class);
     doThrow(new RuntimeException("commit failed")).when(coordinator).process();
 
-    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator);
+    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator, "test-connector");
     coordinatorThread.start();
 
     // wait for the thread to catch the exception, set terminated, and call stop
@@ -152,7 +152,7 @@ public class TestCommitterImpl {
     Coordinator coordinator = mock(Coordinator.class);
     doThrow(new RuntimeException("start failed")).when(coordinator).start();
 
-    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator);
+    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator, "test-connector");
     coordinatorThread.start();
 
     // wait for the thread to catch the exception, set terminated, and call stop
