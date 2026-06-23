@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.base.Splitter;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.kafka.connect.sink.SinkRecord;
@@ -87,10 +88,14 @@ public abstract class RecordRouter {
    * @return The value of the field in the record as a string.
    */
   public String extractFieldFromRecordValue(SinkRecord record, String field) {
+    return extractFieldFromRecordValue(record, Splitter.on('.').splitToList(field));
+  }
+
+  public String extractFieldFromRecordValue(SinkRecord record, List<String> fields) {
     if (record.value() == null) {
       return null;
     }
-    Object value = RecordUtils.extractFromRecordValue(record.value(), field);
+    Object value = RecordUtils.extractFromRecordValue(record.value(), fields);
     return value == null ? null : value.toString();
   }
 
@@ -131,7 +136,7 @@ public abstract class RecordRouter {
 
   /** Route records to tables based on a regex that matches the value of a field in the data. */
   public static class StaticRecordRouter extends RecordRouter {
-    private final String routeField;
+    private final List<String> routeFieldPath;
     private final Map<String, Pattern> tablePatterns = Maps.newHashMap();
 
     public StaticRecordRouter(Catalog catalog, IcebergSinkConfig config) {
@@ -141,8 +146,9 @@ public abstract class RecordRouter {
     public StaticRecordRouter(
         Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
       super(catalog, config, metrics);
-      this.routeField = config.tablesRouteField();
+      String routeField = config.tablesRouteField();
       Preconditions.checkNotNull(routeField, "Route field cannot be null with static routing");
+      this.routeFieldPath = Splitter.on('.').splitToList(routeField);
       config
           .tables()
           .forEach(
@@ -152,7 +158,7 @@ public abstract class RecordRouter {
 
     @Override
     public void routeRecord(SinkRecord record) {
-      String routeValue = extractFieldFromRecordValue(record, routeField);
+      String routeValue = extractFieldFromRecordValue(record, routeFieldPath);
       if (routeValue != null) {
         tablePatterns.forEach(
             (tableName, tablePattern) -> {
@@ -166,7 +172,7 @@ public abstract class RecordRouter {
 
   /** Route records to the table specified in a field in the data. */
   public static class DynamicRecordRouter extends RecordRouter {
-    private final String routeField;
+    private final List<String> routeFieldPath;
 
     public DynamicRecordRouter(Catalog catalog, IcebergSinkConfig config) {
       this(catalog, config, ConnectorMetrics.NOOP);
@@ -175,13 +181,14 @@ public abstract class RecordRouter {
     public DynamicRecordRouter(
         Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
       super(catalog, config, metrics);
-      routeField = config.tablesRouteField();
+      String routeField = config.tablesRouteField();
       Preconditions.checkNotNull(routeField, "Route field cannot be null with dynamic routing");
+      this.routeFieldPath = Splitter.on('.').splitToList(routeField);
     }
 
     @Override
     public void routeRecord(SinkRecord record) {
-      String routeValue = extractFieldFromRecordValue(record, routeField);
+      String routeValue = extractFieldFromRecordValue(record, routeFieldPath);
       if (routeValue != null) {
         String tableName = routeValue.toLowerCase(Locale.ROOT);
         writeToTable(tableName, record, true);

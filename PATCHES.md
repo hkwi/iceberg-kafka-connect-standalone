@@ -794,3 +794,37 @@ Refresh procedure if #16504 receives more commits before merge:
 When #16504 is merged into upstream main, run `scripts/sync-upstream.sh`, compare
 upstream's integration-test logging with this standalone adaptation, and drop or
 refresh this local commit/entry accordingly.
+
+## apache/iceberg#16655: Pre-split route field paths
+
+- PR: https://github.com/apache/iceberg/pull/16655
+- Captured PR head commit: 9eaee5bd5522cb195387f30ed5f08065f126da7f
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay removes per-record dotted route-field parsing from the built-in
+Kafka Connect routers. `RecordUtils` now has a `List<String>` path overload, and
+`RecordRouter.StaticRecordRouter` / `DynamicRecordRouter` split
+`iceberg.tables.route-field` once at construction time before using the
+pre-split path on the hot record-routing path.
+
+The Apache PR applies the optimization inside `SinkWriter`; this standalone repo
+already carries #11623, where writer ownership and routing moved into
+`RecordRouter`, so the same optimization is applied there instead. The public
+String-based extraction helper is kept for custom routers and delegates through
+the new path overload.
+
+Refresh procedure if #16655 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16655 and compare its `RecordUtils` and routing changes against
+   this `RecordRouter`-based adaptation.
+3. Preserve #11623's router structure while keeping built-in static/dynamic
+   routers on pre-split route-field paths.
+4. Run `./gradlew -q :iceberg-kafka-connect:test --tests
+   org.apache.iceberg.connect.data.TestRecordUtils --tests
+   org.apache.iceberg.connect.data.TestSinkWriter`.
+5. Amend or replace the standalone #16655 overlay commit.
+
+When #16655 is merged into upstream main, run `scripts/sync-upstream.sh`, compare
+upstream's `SinkWriter`-based optimization with this `RecordRouter` adaptation,
+and drop or refresh this local commit/entry accordingly.

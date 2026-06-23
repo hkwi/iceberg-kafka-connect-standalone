@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.iceberg.Table;
@@ -93,6 +94,20 @@ public class TestRecordUtils {
   }
 
   @Test
+  public void testExtractFromRecordValueStructNestedPath() {
+    Schema idSchema = SchemaBuilder.struct().field("key", Schema.INT64_SCHEMA).build();
+    Schema dataSchema = SchemaBuilder.struct().field("id", idSchema).build();
+    Schema valSchema = SchemaBuilder.struct().field("data", dataSchema).build();
+
+    Struct id = new Struct(idSchema).put("key", 123L);
+    Struct data = new Struct(dataSchema).put("id", id);
+    Struct val = new Struct(valSchema).put("data", data);
+
+    Object result = RecordUtils.extractFromRecordValue(val, List.of("data", "id", "key"));
+    assertThat(result).isEqualTo(123L);
+  }
+
+  @Test
   public void testExtractFromRecordValueStructNull() {
     Schema valSchema = SchemaBuilder.struct().field("key", Schema.INT64_SCHEMA).build();
     Struct val = new Struct(valSchema).put("key", 123L);
@@ -118,6 +133,16 @@ public class TestRecordUtils {
     Map<String, Object> val = ImmutableMap.of("data", data);
 
     Object result = RecordUtils.extractFromRecordValue(val, "data.id.key");
+    assertThat(result).isEqualTo(123L);
+  }
+
+  @Test
+  public void testExtractFromRecordValueMapNestedPath() {
+    Map<String, Object> id = ImmutableMap.of("key", 123L);
+    Map<String, Object> data = ImmutableMap.of("id", id);
+    Map<String, Object> val = ImmutableMap.of("data", data);
+
+    Object result = RecordUtils.extractFromRecordValue(val, List.of("data", "id", "key"));
     assertThat(result).isEqualTo(123L);
   }
 

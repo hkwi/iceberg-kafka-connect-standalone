@@ -48,9 +48,12 @@ import org.apache.kafka.connect.errors.DataException;
 
 class RecordUtils {
 
-  @SuppressWarnings("unchecked")
   static Object extractFromRecordValue(Object recordValue, String fieldName) {
-    List<String> fields = Splitter.on('.').splitToList(fieldName);
+    return extractFromRecordValue(recordValue, Splitter.on('.').splitToList(fieldName));
+  }
+
+  @SuppressWarnings("unchecked")
+  static Object extractFromRecordValue(Object recordValue, List<String> fields) {
     if (recordValue instanceof Struct) {
       return valueFromStruct((Struct) recordValue, fields);
     } else if (recordValue instanceof Map) {
