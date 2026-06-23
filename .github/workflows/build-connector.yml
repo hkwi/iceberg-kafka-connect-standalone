@@ -31,7 +31,7 @@ on:
         default: '1.11.0'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-connector-zip:
@@ -70,3 +70,34 @@ jobs:
           retention-days: 14
           path: |
             upstream/kafka-connect/kafka-connect-runtime/build/distributions/*.zip
+
+      - name: Publish rolling snapshot release
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=standalone-snapshot
+          title="Latest standalone connector snapshot"
+          notes="Built from ${GITHUB_SHA} with Iceberg artifacts ${{ steps.iceberg-version.outputs.version }}. This prerelease is overwritten by the next main build or manual distribution build."
+
+          git tag -f "${tag}" "${GITHUB_SHA}"
+          git push --force origin "refs/tags/${tag}"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" \
+              --title "${title}" \
+              --notes "${notes}" \
+              --prerelease
+          else
+            gh release create "${tag}" \
+              --title "${title}" \
+              --notes "${notes}" \
+              --prerelease \
+              --target "${GITHUB_SHA}"
+          fi
+
+          gh release upload "${tag}" \
+            upstream/kafka-connect/kafka-connect-runtime/build/distributions/*.zip \
+            --clobber

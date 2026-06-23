@@ -96,11 +96,21 @@ Some runtime integration tasks require the matching Iceberg runtime artifacts,
 such as `iceberg-aws`, `iceberg-gcp`, `iceberg-bigquery`, and `iceberg-azure`, to
 exist in `mavenLocal()` when using the default snapshot version.
 
-## GitHub Actions Artifacts
+## Release Downloads
 
 The `Build Connector Distribution` workflow builds the standalone connector zip
-files and uploads them as workflow artifacts. The uploaded artifact contains both
-the standard runtime distribution and the Hive runtime distribution from:
+files. Pull requests upload short-lived workflow artifacts so sync PRs and local
+overlay PRs can be checked before merge.
+
+When `main` is updated, or when the workflow is run manually, the workflow also
+updates the mutable `standalone-snapshot` prerelease. That prerelease is the
+latest downloadable build of this standalone branch and carries both connector
+distributions as release assets:
+
+- the standard runtime distribution,
+- the Hive runtime distribution.
+
+Both files are produced from:
 
 ```text
 upstream/kafka-connect/kafka-connect-runtime/build/distributions/*.zip
@@ -111,6 +121,10 @@ Maven repositories. Manual runs can choose another Iceberg artifact version with
 the `iceberg-version` workflow input. Snapshot versions such as
 `1.12.0-SNAPSHOT` require the corresponding Iceberg artifacts to be available to
 the workflow.
+
+Apache Iceberg tracking remains PR-based: the sync workflow opens or updates a
+sync pull request when upstream changes are detected. After that PR is reviewed
+and merged, the `main` build refreshes the `standalone-snapshot` release assets.
 
 ## Test
 
