@@ -27,6 +27,10 @@ on:
         description: Apache Iceberg ref to sync
         required: true
         default: main
+      iceberg-version:
+        description: Iceberg artifact version to use for validating the synced connector build
+        required: true
+        default: '1.11.0'
 
 permissions:
   contents: write
@@ -67,3 +71,36 @@ jobs:
             selected Apache Iceberg upstream ref.
 
             The upstream commit is recorded in `UPSTREAM.md`.
+
+            This sync workflow also builds the connector distribution zips from
+            the proposed sync result and uploads them as workflow artifacts.
+
+      - name: Set up Java for sync artifact build
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle for sync artifact build
+        if: steps.changes.outputs.changed == 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build connector distributions from sync result
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          version="${{ inputs['iceberg-version'] || '1.11.0' }}"
+          ./gradlew \
+            -PicebergVersion="${version}" \
+            :iceberg-kafka-connect-runtime:distZip \
+            :iceberg-kafka-connect-runtime:hiveDistZip
+
+      - name: Upload synced connector zip files
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: iceberg-kafka-connect-runtime-sync-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            upstream/kafka-connect/kafka-connect-runtime/build/distributions/*.zip

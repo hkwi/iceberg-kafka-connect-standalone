@@ -123,8 +123,10 @@ the `iceberg-version` workflow input. Snapshot versions such as
 the workflow.
 
 Apache Iceberg tracking remains PR-based: the sync workflow opens or updates a
-sync pull request when upstream changes are detected. After that PR is reviewed
-and merged, the `main` build refreshes the `standalone-snapshot` release assets.
+sync pull request when upstream changes are detected, and that same sync run
+uploads connector zip artifacts built from the proposed sync result. After the
+PR is reviewed and merged, the `main` build refreshes the `standalone-snapshot`
+release assets.
 
 ## Test
 
