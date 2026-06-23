@@ -668,3 +668,31 @@ Refresh procedure if #15969 receives more commits before merge:
 
 When #15969 is merged into upstream main, run `scripts/sync-upstream.sh`, compare the deprecated
 property semantics, and drop or refresh this local commit/entry accordingly.
+
+
+## apache/iceberg#16654: Precompute UUID-as-bytes conversion flag
+
+- PR: https://github.com/apache/iceberg/pull/16654
+- Captured PR head commit: 6cf967833f4ac7b49915cb29d31882a12266f340
+- Standalone handling: local overlay commit on top of the existing local overlay stack
+
+This overlay resolves whether UUID values should be written as Parquet 16-byte values once when a
+`RecordConverter` is constructed instead of recomputing the file-format check for every UUID value.
+The behavior is unchanged: Parquet still receives `UUIDUtil.convert(uuid)`, while other formats keep
+the UUID value.
+
+The standalone integration applies the PR directly on top of the existing #15027/#16681/#16828 UUID
+and temporal conversion overlays. `TestRecordConverter` now defaults mocked `writeProps()` to an
+empty map, matching production where `IcebergSinkConfig.writeProps()` is never null.
+
+Refresh procedure if #16654 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16654 and compare its `RecordConverter` constructor and `convertUUID` changes against
+   this overlay.
+3. Preserve the local UUID conversion behavior from #16828 while refreshing this precomputed flag.
+4. Run focused `TestRecordConverter` plus `./gradlew -q :iceberg-kafka-connect:test`.
+5. Amend or replace the standalone #16654 overlay commit.
+
+When #16654 is merged into upstream main, run `scripts/sync-upstream.sh`, verify that the remaining
+`RecordConverter` diff is only from still-local overlays, and drop or refresh this local commit/entry.
