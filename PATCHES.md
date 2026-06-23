@@ -180,3 +180,27 @@ Refresh procedure if the PR receives more commits before merge:
 When #16360 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16915: Case-insensitive name mapping lookup
+
+- PR: https://github.com/apache/iceberg/pull/16915
+- Captured PR head commit: 40910565ae7865813b68d2a4c26156715bcba846
+- Local Apache checkout commit: dbb9083fa Kafka Connect: Apply case-insensitive name mapping from PR #16915
+- Standalone handling: one overlay commit on top of the existing local overlay stack
+
+This overlay fixes `RecordConverter` lookup when a table name mapping is present
+and `iceberg.tables.schema-case-insensitive=true`. Mapping aliases and fallback
+field names are normalized with `Locale.ROOT` for case-insensitive lookup so
+schema evolution does not create duplicate fields for case-only name differences.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16915-case-insensitive-name-mapping` commit from the latest PR diff.
+3. Copy the affected `kafka-connect/` files into `upstream/kafka-connect/` here, preserving the
+   existing #15027 ZonedDateTime conversion overlay in `RecordConverter` if it is still local.
+4. Amend or replace the standalone #16915 overlay commit.
+
+When #16915 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
