@@ -204,3 +204,31 @@ Refresh procedure if the PR receives more commits before merge:
 When #16915 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16606: Decimal inference for BigDecimal values
+
+- PR: https://github.com/apache/iceberg/pull/16606
+- Captured PR head commit: f61f96a196e7d3bf5ca46d58ffe244ddf3d08ebb
+- Local Apache checkout commit: c06287a2a Kafka Connect: Apply decimal inference fix from PR #16606
+- Standalone handling: one overlay commit on top of the existing local overlay stack
+
+This overlay normalizes inferred `BigDecimal` types so values with scale larger
+than precision, such as `0.001`, become valid Iceberg decimals, and values with
+negative scale, such as `1E+2`, are represented as scale 0 decimals. This avoids
+schema evolution creating invalid decimal types that later fail writes.
+
+The standalone integration applies only the targeted decimal inference and tests
+so existing local overlays are preserved, including #15027 `ZonedDateTime` type
+inference in `SchemaUtils` and the #14618/#11623 `TestSinkWriter` coverage.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16606-decimal-inference` commit from the latest PR diff.
+3. Re-apply the affected `SchemaUtils` and test changes on top of the existing
+   standalone overlays, preserving `ZonedDateTime` inference and prior SinkWriter tests.
+4. Amend or replace the standalone #16606 overlay commit.
+
+When #16606 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
