@@ -21,3 +21,29 @@ Refresh procedure if the PR receives more commits before merge:
 When #14618 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the overlay diff is now empty or intentionally changed,
 and drop this overlay commit/entry.
+
+## apache/iceberg#11623: Topic-based record routing
+
+- PR: https://github.com/apache/iceberg/pull/11623
+- Captured PR head commit: 5bc81bf57273cd1e2949a81026bcc07afd1d3850
+- Local Apache checkout commit: 08932ab75 Kafka Connect: Apply topic routing from PR #11623
+- Standalone handling: one overlay commit on top of the #14618 overlay commit
+
+This overlay was resolved against #14618 so that `SinkWriter` keeps the DLQ
+error handling from #14618 while delegating record routing and writer ownership
+to the #11623 `RecordRouter` implementation.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-11623-topic-routing` commit from the latest PR diff.
+3. Re-apply that commit on top of `pr-14618-dlq-support` and resolve conflicts,
+   preserving both DLQ handling and topic routing.
+4. Copy the affected `kafka-connect/` files into `upstream/kafka-connect/` here.
+5. Amend or replace the standalone #11623 overlay commit.
+
+When #11623 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the overlay diff is now empty or intentionally changed,
+and drop this overlay commit/entry. If #14618 and #11623 merge in a different
+order, refresh or drop the overlay commits from oldest upstream inclusion to
+newest so the remaining local diff stays reviewable.
