@@ -232,3 +232,31 @@ Refresh procedure if the PR receives more commits before merge:
 When #16606 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16828: UUID logical type schema conversion
+
+- PR: https://github.com/apache/iceberg/pull/16828
+- Captured PR head commit: 371bc7db8448948b8af4479c3801aaa314730aec
+- Local Apache checkout commit: b2b384c78 Kafka Connect: Apply UUID schema conversion from PR #16828
+- Standalone handling: one overlay commit on top of the existing local overlay stack
+
+This overlay maps Kafka Connect schemas named `uuid` on STRING and BYTES values
+to Iceberg `UUIDType` instead of falling back to string or binary. The Apache PR
+also adds a core Avro schema conversion test; the standalone overlay carries only
+the Kafka Connect code and tests because this repository builds the connector
+modules.
+
+The standalone integration preserves the existing local `SchemaUtils` overlays,
+including #15027 `ZonedDateTime` inference and #16606 decimal inference.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16828-avro-uuid-schema` commit from the latest PR diff.
+3. Re-apply the Kafka Connect `SchemaUtils` and `TestSchemaUtils` changes on top
+   of the existing standalone overlays.
+4. Amend or replace the standalone #16828 overlay commit.
+
+When #16828 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
