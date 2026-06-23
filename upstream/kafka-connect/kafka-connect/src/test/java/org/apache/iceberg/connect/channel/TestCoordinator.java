@@ -20,6 +20,7 @@ package org.apache.iceberg.connect.channel;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -130,6 +131,8 @@ public class TestCoordinator extends ChannelTestBase {
 
   @Test
   public void testCommitError() {
+    when(config.commitMaxConsecutiveFailures()).thenReturn(1);
+
     // this spec isn't registered with the table
     PartitionSpec badPartitionSpec =
         PartitionSpec.builderFor(SCHEMA).withSpecId(1).identity("id").build();
@@ -152,6 +155,8 @@ public class TestCoordinator extends ChannelTestBase {
 
   @Test
   public void testCommitFailedExceptionPropagates() {
+    when(config.commitMaxConsecutiveFailures()).thenReturn(1);
+
     Table spiedTable = spy(table);
     AppendFiles spiedAppend = spy(table.newAppend());
     doThrow(new CommitFailedException("Glue detected concurrent update"))
@@ -168,6 +173,136 @@ public class TestCoordinator extends ChannelTestBase {
                     EventTestUtil.now()))
         .isInstanceOf(CommitFailedException.class)
         .hasMessageContaining("Glue detected concurrent update");
+  }
+
+  
+  public void testCommitBoundedRetry() {
+    when(config.commitMaxConsecutiveFailures()).thenReturn(3);
+    when(config.commitIntervalMs()).thenReturn(0);
+    when(config.commitTimeoutMs()).thenReturn(Integer.MAX_VALUE);
+
+    Table spiedTable = spy(table);
+    AppendFiles spiedAppend = spy(table.newAppend());
+    doThrow(new CommitFailedException("transient error")).when(spiedAppend).commit();
+    when(spiedTable.newAppend()).thenReturn(spiedAppend);
+    when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    Coordinator coordinator =
+        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    coordinator.start();
+    initConsumer();
+
+    triggerCommitCycle(coordinator);
+    triggerCommitCycle(coordinator);
+
+    assertThatThrownBy(() -> triggerCommitCycle(coordinator))
+        .isInstanceOf(CommitFailedException.class)
+        .hasMessageContaining("transient error");
+  }
+
+  
+  public void testCommitCounterResetsOnSuccess() {
+    when(config.commitMaxConsecutiveFailures()).thenReturn(3);
+    when(config.commitIntervalMs()).thenReturn(0);
+    when(config.commitTimeoutMs()).thenReturn(Integer.MAX_VALUE);
+
+    table.newAppend().appendFile(EventTestUtil.createDataFile()).commit();
+
+    Table spiedTable = spy(table);
+    AppendFiles failingAppend = spy(table.newAppend());
+    doThrow(new CommitFailedException("transient error")).when(failingAppend).commit();
+
+    AppendFiles noOpAppend = mock(AppendFiles.class);
+    when(noOpAppend.validateWith(any())).thenReturn(noOpAppend);
+    when(noOpAppend.set(any(), any())).thenReturn(noOpAppend);
+    when(noOpAppend.toBranch(any())).thenReturn(noOpAppend);
+    when(noOpAppend.appendFile(any())).thenReturn(noOpAppend);
+
+    when(spiedTable.newAppend())
+        .thenReturn(failingAppend)
+        .thenReturn(failingAppend)
+        .thenReturn(noOpAppend)
+        .thenReturn(failingAppend)
+        .thenReturn(failingAppend)
+        .thenReturn(failingAppend);
+    when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    Coordinator coordinator =
+        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    coordinator.start();
+    initConsumer();
+
+    triggerCommitCycle(coordinator);
+    triggerCommitCycle(coordinator);
+    triggerCommitCycle(coordinator);
+    triggerCommitCycle(coordinator);
+    triggerCommitCycle(coordinator);
+
+    assertThatThrownBy(() -> triggerCommitCycle(coordinator))
+        .isInstanceOf(CommitFailedException.class)
+        .hasMessageContaining("transient error");
+  }
+
+  
+  public void testCommitFailedExceptionCauseChainWithMultipleThreads() {
+    when(config.commitMaxConsecutiveFailures()).thenReturn(2);
+    when(config.commitThreads()).thenReturn(2);
+    when(config.commitIntervalMs()).thenReturn(0);
+    when(config.commitTimeoutMs()).thenReturn(Integer.MAX_VALUE);
+
+    Table spiedTable = spy(table);
+    AppendFiles spiedAppend = spy(table.newAppend());
+    doThrow(new RuntimeException("wrapped", new CommitFailedException("concurrent update")))
+        .when(spiedAppend)
+        .commit();
+    when(spiedTable.newAppend()).thenReturn(spiedAppend);
+    when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    Coordinator coordinator =
+        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    coordinator.start();
+    initConsumer();
+
+    triggerCommitCycle(coordinator);
+
+    assertThatThrownBy(() -> triggerCommitCycle(coordinator))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("wrapped");
+  }
+
+  private long nextOffset = 1;
+
+  private void triggerCommitCycle(Coordinator coordinator) {
+    coordinator.process();
+
+    byte[] startBytes = producer.history().get(producer.history().size() - 1).value();
+    Event startEvent = AvroUtil.decode(startBytes);
+    UUID commitId = ((StartCommit) startEvent.payload()).commitId();
+
+    Event commitResponse =
+        new Event(
+            config.connectGroupId(),
+            new DataWritten(
+                StructType.of(),
+                commitId,
+                TableReference.of("catalog", TableIdentifier.of("db", "tbl"), null),
+                ImmutableList.of(EventTestUtil.createDataFile()),
+                ImmutableList.of()));
+    byte[] bytes = AvroUtil.encode(commitResponse);
+    consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, nextOffset++, "key", bytes));
+
+    Event commitReady =
+        new Event(
+            config.connectGroupId(),
+            new DataComplete(
+                commitId, ImmutableList.of(new TopicPartitionOffset("topic", 1, 1L, null))));
+    bytes = AvroUtil.encode(commitReady);
+    consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, nextOffset++, "key", bytes));
+
+    coordinator.process();
   }
 
   private void assertCommitTable(int idx, UUID commitId, OffsetDateTime ts) {
