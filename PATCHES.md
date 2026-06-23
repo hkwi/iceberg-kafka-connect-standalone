@@ -377,3 +377,32 @@ Refresh procedure if the PR receives more commits before merge:
 When #16843 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16772: Debezium source timestamp CDC metadata
+
+- PR: https://github.com/apache/iceberg/pull/16772
+- Captured PR head commit: d43c27fdaaf924d781bfaa396de603a49c7b2b4e
+- Local Apache checkout commit: 1ca3df8cb Kafka Connect: Apply Debezium source timestamp from PR #16772
+- Standalone handling: one Kafka Connect transforms overlay commit on top of the existing local overlay stack
+
+This overlay keeps the Debezium source database timestamp in CDC metadata. The
+transform already exposes the connector event timestamp as `_cdc.ts`; this adds
+`_cdc.source_ts` from Debezium `source.ts_ms` for both schema and schemaless
+records so consumers can distinguish connector processing time from source
+database change time.
+
+The Apache PR also updates `docs/docs/kafka-connect.md`. This standalone
+repository does not carry the Apache docs tree, so the local overlay contains
+only the transform source and tests.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16772-debezium-source-timestamp` commit from the latest PR diff.
+3. Copy or re-apply the affected Kafka Connect transforms source and test files into
+   `upstream/kafka-connect/` here.
+4. Amend or replace the standalone #16772 overlay commit.
+
+When #16772 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
