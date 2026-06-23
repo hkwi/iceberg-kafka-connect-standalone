@@ -506,4 +506,30 @@ public class TestCoordinator extends ChannelTestBase {
     assertThat(table.snapshots()).hasSize(2);
     assertThat(table.currentSnapshot().summary()).containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":7}");
   }
+
+  
+  public void testCoordinatorCommittedOffsetResetAfterClusterRecreation() {
+    table
+        .newAppend()
+        .appendFile(EventTestUtil.createDataFile())
+        .set(OFFSETS_SNAPSHOT_PROP, "{\"0\":100}")
+        .commit();
+
+    table.refresh();
+    assertThat(table.snapshots()).hasSize(1);
+    assertThat(table.currentSnapshot().summary())
+        .containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":100}");
+
+    OffsetDateTime ts = EventTestUtil.now();
+    UUID commitId =
+        coordinatorTest(ImmutableList.of(EventTestUtil.createDataFile()), ImmutableList.of(), ts);
+
+    table.refresh();
+    assertThat(table.snapshots()).hasSize(2);
+    assertThat(table.currentSnapshot().summary()).containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":3}");
+
+    assertThat(producer.history()).hasSize(3);
+    assertCommitTable(1, commitId, ts);
+    assertCommitComplete(2, commitId, ts);
+  }
 }

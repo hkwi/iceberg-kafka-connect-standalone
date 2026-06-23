@@ -273,8 +273,30 @@ class Coordinator extends Channel {
     // records for other partitions.  Merge the updated topic partitions with the last committed
     // offsets.
     Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(table, branch);
+
+    boolean controlTopicReset =
+        !committedOffsets.isEmpty()
+            && committedOffsets.entrySet().stream()
+                .anyMatch(
+                    e -> {
+                      Long current = controlTopicOffsets.get(e.getKey());
+                      return current != null && current < e.getValue();
+                    });
+
+    if (controlTopicReset) {
+      LOG.warn(
+          "Coordinator {}: detected possible Kafka cluster recreation for table {}. "
+              + "Control topic offsets {} are lower than previously committed offsets {}. "
+              + "Skipping offset deduplication and resetting stored offset baseline.",
+          taskId,
+          tableIdentifier,
+          controlTopicOffsets,
+          committedOffsets);
+    }
+
+    Map<Integer, Long> baseOffsets = buildBaseOffsets(committedOffsets, controlTopicOffsets);
     Map<Integer, Long> mergedOffsets =
-        Stream.of(committedOffsets, controlTopicOffsets)
+        Stream.of(baseOffsets, controlTopicOffsets)
             .flatMap(map -> map.entrySet().stream())
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, Long::max));
     String offsetsJson = offsetsToJson(mergedOffsets);
@@ -283,7 +305,7 @@ class Coordinator extends Channel {
         envelopeList.stream()
             .filter(
                 envelope -> {
-                  Long minOffset = committedOffsets.get(envelope.partition());
+                  Long minOffset = baseOffsets.get(envelope.partition());
                   return minOffset == null || envelope.offset() >= minOffset;
                 })
             .map(envelope -> (DataWritten) envelope.event().payload())
@@ -361,6 +383,17 @@ class Coordinator extends Channel {
           commitState.currentCommitId(),
           validThroughTs);
     }
+  }
+
+  private Map<Integer, Long> buildBaseOffsets(
+      Map<Integer, Long> committedOffsets, Map<Integer, Long> controlTopicOffsets) {
+    return committedOffsets.entrySet().stream()
+        .filter(
+            e -> {
+              Long current = controlTopicOffsets.get(e.getKey());
+              return current == null || current >= e.getValue();
+            })
+        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
   }
 
   private SnapshotAncestryValidator offsetValidator(

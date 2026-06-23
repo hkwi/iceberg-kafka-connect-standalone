@@ -153,3 +153,30 @@ Refresh procedure if the PR receives more commits before merge:
 When #16366 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16360: Recover after control topic offset reset
+
+- PR: https://github.com/apache/iceberg/pull/16360
+- Captured PR head commit: e4f0164d5baa26dfebf8c169aad3a197f61df7aa
+- Local Apache checkout commit: 55e3f8340 Kafka Connect: Apply control topic reset recovery from PR #16360
+- Standalone handling: one overlay commit on top of the #14618, #11623, #15027, #16434, #16156, and #16366 overlay commits
+
+This overlay handles Kafka cluster recreation or control-topic reset scenarios
+where new control-topic offsets are lower than offsets stored in the latest
+Iceberg snapshot. For reset partitions, the stale snapshot offset is removed
+from the deduplication baseline so new `DataWritten` events can be committed and
+the stored offset baseline is reset to the new control topic offsets.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16360-control-topic-reset` commit from the latest PR diff.
+3. Re-apply the `Coordinator` changes on top of the existing standalone overlays,
+   preserving #16434 bounded commit retry and #16366 retriable transactional commit
+   handling in the same class.
+4. Copy or re-apply the affected `kafka-connect/` files into `upstream/kafka-connect/` here.
+5. Amend or replace the standalone #16360 overlay commit.
+
+When #16360 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
