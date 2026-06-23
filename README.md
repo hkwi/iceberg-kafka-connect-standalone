@@ -96,6 +96,22 @@ Some runtime integration tasks require the matching Iceberg runtime artifacts,
 such as `iceberg-aws`, `iceberg-gcp`, `iceberg-bigquery`, and `iceberg-azure`, to
 exist in `mavenLocal()` when using the default snapshot version.
 
+## GitHub Actions Artifacts
+
+The `Build Connector Distribution` workflow builds the standalone connector zip
+files and uploads them as workflow artifacts. The uploaded artifact contains both
+the standard runtime distribution and the Hive runtime distribution from:
+
+```text
+upstream/kafka-connect/kafka-connect-runtime/build/distributions/*.zip
+```
+
+The workflow uses Iceberg `1.11.0` artifacts by default so it can run from public
+Maven repositories. Manual runs can choose another Iceberg artifact version with
+the `iceberg-version` workflow input. Snapshot versions such as
+`1.12.0-SNAPSHOT` require the corresponding Iceberg artifacts to be available to
+the workflow.
+
 ## Test
 
 Run the connector unit tests:
