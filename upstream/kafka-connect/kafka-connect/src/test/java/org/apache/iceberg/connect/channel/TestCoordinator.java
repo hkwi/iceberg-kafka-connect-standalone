@@ -441,6 +441,84 @@ public class TestCoordinator extends ChannelTestBase {
     assertThat(mockIcebergSinkTask.isCoordinatorRunning()).isFalse();
   }
 
+
+  @Test
+  public void testStaleAndCurrentDataWrittenCommitAsSeparateSnapshots() {
+    when(config.commitIntervalMs()).thenReturn(0);
+    when(config.commitTimeoutMs()).thenReturn(Integer.MAX_VALUE);
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    Coordinator coordinator =
+        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    coordinator.start();
+    initConsumer();
+
+    coordinator.process();
+
+    assertThat(producer.history()).hasSize(1);
+    Event startEvent = AvroUtil.decode(producer.history().get(0).value());
+    UUID currentCommitId = ((StartCommit) startEvent.payload()).commitId();
+    UUID staleCommitId = UUID.randomUUID();
+    TableReference tableReference = TableReference.of("catalog", TABLE_IDENTIFIER, null);
+
+    Event staleWritten =
+        new Event(
+            config.connectGroupId(),
+            new DataWritten(
+                StructType.of(),
+                staleCommitId,
+                tableReference,
+                ImmutableList.of(EventTestUtil.createDataFile("path/to/stale.parquet")),
+                ImmutableList.of()));
+    consumer.addRecord(
+        new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", AvroUtil.encode(staleWritten)));
+
+    Event currentWritten =
+        new Event(
+            config.connectGroupId(),
+            new DataWritten(
+                StructType.of(),
+                currentCommitId,
+                tableReference,
+                ImmutableList.of(EventTestUtil.createDataFile("path/to/current.parquet")),
+                ImmutableList.of(EventTestUtil.createDeleteFile())));
+    consumer.addRecord(
+        new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key", AvroUtil.encode(currentWritten)));
+
+    OffsetDateTime ts = EventTestUtil.now();
+    Event currentReady =
+        new Event(
+            config.connectGroupId(),
+            new DataComplete(
+                currentCommitId, ImmutableList.of(new TopicPartitionOffset("topic", 1, 1L, ts))));
+    consumer.addRecord(
+        new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 3, "key", AvroUtil.encode(currentReady)));
+
+    coordinator.process();
+
+    table.refresh();
+    List<Snapshot> snapshots = ImmutableList.copyOf(table.snapshots());
+    assertThat(snapshots).hasSize(2);
+
+    Snapshot staleSnapshot = snapshots.get(0);
+    Snapshot currentSnapshot = snapshots.get(1);
+    assertThat(staleSnapshot.operation()).isEqualTo(DataOperations.APPEND);
+    assertThat(currentSnapshot.operation()).isEqualTo(DataOperations.OVERWRITE);
+    assertThat(staleSnapshot.sequenceNumber()).isLessThan(currentSnapshot.sequenceNumber());
+    assertThat(staleSnapshot.summary())
+        .containsEntry(COMMIT_ID_SNAPSHOT_PROP, staleCommitId.toString())
+        .containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":2}");
+    assertThat(currentSnapshot.summary())
+        .containsEntry(COMMIT_ID_SNAPSHOT_PROP, currentCommitId.toString())
+        .containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":4}")
+        .containsEntry(VALID_THROUGH_TS_SNAPSHOT_PROP, ts.toString());
+
+    assertThat(producer.history()).hasSize(4);
+    assertCommitTable(1, staleCommitId, null);
+    assertCommitTable(2, currentCommitId, ts);
+    assertCommitComplete(3, currentCommitId, ts);
+  }
+
   @Test
   public void testCoordinatorCommittedOffsetMerging() {
     // Set the initial offsets based on a message from partition 1

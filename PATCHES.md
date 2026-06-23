@@ -596,3 +596,42 @@ Refresh procedure if #16598 receives more commits before merge:
 
 When #16598 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream's
 identifier-field validation against this overlay, and drop or refresh this local commit/entry.
+
+## apache/iceberg#15651/#15710: Commit stale DataWritten groups separately by commitId
+
+- PRs: https://github.com/apache/iceberg/pull/15651 and https://github.com/apache/iceberg/pull/15710
+- Captured #15651 PR head commit: 17956462cd7a073e17de9db1c8492a72ce0a8fb1
+- Captured #15710 PR head commit: fdea92c42b12704dc65994fdcf91a5c805e9f730
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay fixes the stale `DataWritten` partial-commit path by grouping buffered commit responses
+per table and per Kafka Connect `commitId`. A late `DataWritten` from an earlier commit cycle is now
+committed before the current commit cycle's group and in a separate Iceberg append or row-delta
+operation, so it receives a lower Iceberg sequence number. This prevents stale data files and current
+cycle equality deletes from sharing the same sequence number, which would break delete application
+for CDC/upsert workloads.
+
+The standalone integration intentionally keeps this narrower than the current upstream PRs:
+
+1. It preserves the local #16282 replay filter that skips already committed commit IDs after control
+   topic offset reset.
+2. It does not add the larger #15651 operational surface such as JMX metrics, stale group retry
+   configuration, TTL eviction, or documentation.
+3. It records group-local control offsets on intermediate stale groups, and records the full current
+   control-topic offset baseline and valid-through timestamp only on the last group for each table.
+4. It keeps the existing all-or-nothing `commitConsumerOffsets()` behavior after all table groups
+   commit successfully.
+
+Refresh procedure if #15651 or #15710 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read both PRs and compare their `CommitState`, `Coordinator`, and `Channel` behavior against
+   this local commitId grouping overlay.
+3. Preserve the local #16282 replay filter and #16366/#16084 channel behavior when adapting newer
+   upstream changes.
+4. Run `TestCommitState`, `TestCoordinator`, and `./gradlew -q :iceberg-kafka-connect:test`.
+5. Amend or replace the standalone overlay commit.
+
+When an upstream stale-`DataWritten` fix is merged into main, run `scripts/sync-upstream.sh`, compare
+sequence-number ordering, offset snapshot semantics, and replay filtering, then drop or refresh this
+local commit/entry accordingly.

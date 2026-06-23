@@ -208,16 +208,29 @@ class Coordinator extends Channel {
   }
 
   private void doCommit(boolean partialCommit) {
-    Map<TableReference, List<Envelope>> commitMap = commitState.tableCommitMap();
+    Map<TableReference, List<CommitState.CommitGroup>> commitMap = commitState.tableCommitGroups();
     OffsetDateTime validThroughTs = commitState.validThroughTs(partialCommit);
+    Map<Integer, Long> currentControlTopicOffsets = controlTopicOffsets();
 
     Tasks.foreach(commitMap.entrySet())
         .executeWith(exec)
         .stopOnFailure()
         .run(
-            entry ->
+            entry -> {
+              List<CommitState.CommitGroup> groups = entry.getValue();
+              for (int index = 0; index < groups.size(); index++) {
+                CommitState.CommitGroup group = groups.get(index);
+                boolean lastGroup = index == groups.size() - 1;
+                Map<Integer, Long> groupOffsets =
+                    lastGroup ? currentControlTopicOffsets : groupControlTopicOffsets(group);
                 commitToTable(
-                    entry.getKey(), entry.getValue(), controlTopicOffsets(), validThroughTs));
+                    entry.getKey(),
+                    group.commitId(),
+                    group.envelopes(),
+                    groupOffsets,
+                    lastGroup ? validThroughTs : null);
+              }
+            });
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
@@ -237,6 +250,15 @@ class Coordinator extends Channel {
         validThroughTs);
   }
 
+  private Map<Integer, Long> groupControlTopicOffsets(CommitState.CommitGroup group) {
+    return group.envelopes().stream()
+        .collect(
+            Collectors.toMap(
+                Envelope::partition,
+                envelope -> envelope.offset() + 1,
+                Long::max));
+  }
+
   private String offsetsToJson(Map<Integer, Long> offsets) {
     try {
       return MAPPER.writeValueAsString(offsets);
@@ -248,6 +270,7 @@ class Coordinator extends Channel {
   @SuppressWarnings("checkstyle:CyclomaticComplexity")
   private void commitToTable(
       TableReference tableReference,
+      UUID commitId,
       List<Envelope> envelopeList,
       Map<Integer, Long> controlTopicOffsets,
       OffsetDateTime validThroughTs) {
@@ -353,7 +376,7 @@ class Coordinator extends Channel {
           appendOp.toBranch(branch);
         }
         appendOp.set(snapshotOffsetsProp, offsetsJson);
-        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
+        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitId.toString());
         appendOp.set(TASK_ID_SNAPSHOT_PROP, taskId);
         if (validThroughTs != null) {
           appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
@@ -367,7 +390,7 @@ class Coordinator extends Channel {
           deltaOp.toBranch(branch);
         }
         deltaOp.set(snapshotOffsetsProp, offsetsJson);
-        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
+        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitId.toString());
         deltaOp.set(TASK_ID_SNAPSHOT_PROP, taskId);
         if (validThroughTs != null) {
           deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
@@ -382,7 +405,7 @@ class Coordinator extends Channel {
           new Event(
               config.connectGroupId(),
               new CommitToTable(
-                  commitState.currentCommitId(), tableReference, snapshotId, validThroughTs));
+                  commitId, tableReference, snapshotId, validThroughTs));
       send(event);
 
       LOG.info(
@@ -390,7 +413,7 @@ class Coordinator extends Channel {
           taskId,
           tableIdentifier,
           snapshotId,
-          commitState.currentCommitId(),
+          commitId,
           validThroughTs);
     }
   }
