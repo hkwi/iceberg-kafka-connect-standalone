@@ -406,3 +406,46 @@ Refresh procedure if the PR receives more commits before merge:
 When #16772 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16681: Avro temporal logical type support
+
+- PR: https://github.com/apache/iceberg/pull/16681
+- Captured PR head commit: 5f86dd88c835e269ab6d1d89c667517025bb0fe6
+- Local Apache checkout commit: 4d56e0e2f Kafka Connect: Apply Avro temporal logical types from PR #16681
+- Standalone handling: Kafka Connect overlay commit plus an Iceberg core dependency requirement
+
+This overlay teaches the Kafka Connect sink to preserve temporal semantics for
+AvroConverter schemas that arrive as named numeric values, including
+`timestamp-micros`, `timestamp-nanos`, `local-timestamp-millis`,
+`local-timestamp-micros`, `local-timestamp-nanos`, and `time-micros`. The
+Connect schema is threaded into nested struct, list, and map value conversion so
+numeric temporals are scaled as millis, micros, or nanos instead of always being
+interpreted as milliseconds.
+
+The Apache PR also changes the Iceberg core Avro read path for `time-millis` and
+`local-timestamp-*` logical types. Those core files are not part of this
+standalone repository. For full #16681 behavior, build the runtime with Iceberg
+core/data artifacts from the local Apache checkout commit listed above, or with
+an upstream release after #16681 is merged.
+
+The standalone integration preserves existing local overlays while applying this PR:
+
+1. `SchemaUtils` keeps #15027 `ZonedDateTime` inference.
+2. `SchemaUtils` keeps #16606 decimal precision/scale normalization.
+3. `SchemaUtils` keeps #16828 UUID schema-name mapping for STRING and BYTES.
+4. `RecordConverter` keeps #16915 case-insensitive name mapping lookup.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16681-avro-temporal-logical-types` commit from the latest PR diff.
+3. Re-apply the Kafka Connect `RecordConverter`, `SchemaUtils`, and tests on top
+   of the existing standalone overlays, preserving the four integration points listed above.
+4. Re-publish the Iceberg dependency artifacts from the refreshed Apache checkout if the
+   core Avro read-path part is needed in local runtime builds.
+5. Amend or replace the standalone #16681 overlay commit.
+
+When #16681 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, ensure the
+runtime uses Iceberg artifacts containing the core Avro changes, and drop or
+refresh this overlay commit/entry accordingly.
