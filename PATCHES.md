@@ -546,3 +546,21 @@ Refresh procedure if #16084 receives more commits before merge:
 
 When #16084 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream's worker
 polling implementation against this adapted overlay, and drop or refresh this local commit/entry.
+
+## apache/iceberg#15344: Convert Avro timestamp-millis Date values for long fields
+
+- Issue: https://github.com/apache/iceberg/issues/15344
+- Standalone handling: issue-driven local overlay commit on top of the existing local overlay stack
+
+This overlay allows `RecordConverter.convertLong` to accept `java.util.Date` values by returning
+`Date.getTime()`. This covers existing Iceberg tables whose field type is `LONG` while an Avro
+`timestamp-millis` value arrives from Kafka Connect's Avro converter as a `Date`, preserving the
+logical type's physical epoch-millis value instead of failing with `Cannot convert to long`.
+
+The schema inference path is intentionally unchanged: `Date` values still infer as Iceberg
+timestamps, so auto-created tables keep timestamp semantics rather than silently creating `LONG`
+columns.
+
+When upstream adds a fix for #15344, run `scripts/sync-upstream.sh`, compare whether upstream keeps
+this existing-LONG behavior and the timestamp inference behavior, and drop or refresh this local
+overlay accordingly.

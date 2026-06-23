@@ -496,6 +496,27 @@ public class TestRecordConverter {
               long val = converter.convertLong(input);
               assertThat(val).isEqualTo(expectedLong);
             });
+
+    Date timestampMillis = new Date(1700000000123L);
+    assertThat(converter.convertLong(timestampMillis)).isEqualTo(timestampMillis.getTime());
+  }
+
+  @Test
+  public void testConnectTimestampDateConvertsToLongField() {
+    org.apache.iceberg.Schema icebergSchema =
+        new org.apache.iceberg.Schema(NestedField.required(1, "l", LongType.get()));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(icebergSchema);
+
+    RecordConverter converter = new RecordConverter(table, config);
+
+    Schema connectSchema = SchemaBuilder.struct().field("l", Timestamp.SCHEMA).build();
+    Date timestampMillis = new Date(1700000000123L);
+    Struct struct = new Struct(connectSchema).put("l", timestampMillis);
+
+    Record record = converter.convert(struct);
+
+    assertThat(record.getField("l")).isEqualTo(timestampMillis.getTime());
   }
 
   @Test
