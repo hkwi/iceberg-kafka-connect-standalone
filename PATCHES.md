@@ -696,3 +696,31 @@ Refresh procedure if #16654 receives more commits before merge:
 
 When #16654 is merged into upstream main, run `scripts/sync-upstream.sh`, verify that the remaining
 `RecordConverter` diff is only from still-local overlays, and drop or refresh this local commit/entry.
+
+
+## apache/iceberg#16658: Single-pass JsonToMap array uniformity checks
+
+- PR: https://github.com/apache/iceberg/pull/16658
+- Captured PR head commit: 8c5f5fa194ccc8123979f2165a78ea7bec960fa1
+- Standalone handling: local overlay commit on top of the existing local overlay stack
+
+This overlay removes per-record `HashSet` allocation from `JsonToMapUtils` array type inference. The
+array element class check now tracks the first element class and returns early on the first mismatch.
+The nested-array schema check does the same for inferred element schemas, avoiding additional
+`schemaFromNode` calls after an inconsistency is found. Behavior is unchanged for empty arrays,
+uniform arrays, mixed arrays, and nested arrays.
+
+The change is isolated to `kafka-connect-transforms` and does not interact with the local sink writer,
+router, DLQ, or coordinator overlays.
+
+Refresh procedure if #16658 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16658 and compare its `JsonToMapUtils` array inference changes against this overlay.
+3. Re-apply the single-pass behavior without changing transform output schemas.
+4. Run focused `TestJsonToMapUtils` plus `./gradlew -q :iceberg-kafka-connect-transforms:test` and
+   `./gradlew -q :iceberg-kafka-connect:test`.
+5. Amend or replace the standalone #16658 overlay commit.
+
+When #16658 is merged into upstream main, run `scripts/sync-upstream.sh`, verify the transform diff
+is empty or only from still-local overlays, and drop or refresh this local commit/entry.
