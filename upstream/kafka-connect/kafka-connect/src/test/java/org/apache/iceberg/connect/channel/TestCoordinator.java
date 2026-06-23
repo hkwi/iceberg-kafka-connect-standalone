@@ -68,7 +68,10 @@ public class TestCoordinator extends ChannelTestBase {
 
     OffsetDateTime ts = EventTestUtil.now();
     UUID commitId =
-        coordinatorTest(ImmutableList.of(EventTestUtil.createDataFile()), ImmutableList.of(), ts);
+        coordinatorTest(
+            ImmutableList.of(EventTestUtil.createDataFile()),
+            ImmutableList.of(),
+            ts);
     table.refresh();
 
     assertThat(producer.history()).hasSize(3);
@@ -507,7 +510,50 @@ public class TestCoordinator extends ChannelTestBase {
     assertThat(table.currentSnapshot().summary()).containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":7}");
   }
 
-  
+  @Test
+  public void testStaleDataWrittenIsSkippedDuringPartialRecoveryCommit() {
+    DataFile dataFile = EventTestUtil.createDataFile();
+    UUID staleCommitId = UUID.randomUUID();
+    table
+        .newAppend()
+        .appendFile(dataFile)
+        .set(OFFSETS_SNAPSHOT_PROP, "{\"0\":3}")
+        .set(COMMIT_ID_SNAPSHOT_PROP, staleCommitId.toString())
+        .commit();
+
+    table.refresh();
+    assertThat(table.snapshots()).hasSize(1);
+    assertThat(table.currentSnapshot().summary()).containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":3}");
+
+    when(config.commitIntervalMs()).thenReturn(0);
+    when(config.commitTimeoutMs()).thenReturn(0);
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    Coordinator coordinator =
+        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    coordinator.start();
+    initConsumer();
+
+    Event commitResponse =
+        new Event(
+            config.connectGroupId(),
+            new DataWritten(
+                StructType.of(),
+                staleCommitId,
+                TableReference.of("catalog", TableIdentifier.of("db", "tbl"), null),
+                ImmutableList.of(dataFile),
+                ImmutableList.of()));
+    byte[] bytes = AvroUtil.encode(commitResponse);
+    consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", bytes));
+
+    coordinator.process();
+
+    table.refresh();
+    assertThat(table.snapshots()).hasSize(1);
+    assertThat(table.currentSnapshot().summary()).containsEntry(OFFSETS_SNAPSHOT_PROP, "{\"0\":3}");
+  }
+
+  @Test
   public void testCoordinatorCommittedOffsetResetAfterClusterRecreation() {
     table
         .newAppend()
@@ -522,7 +568,10 @@ public class TestCoordinator extends ChannelTestBase {
 
     OffsetDateTime ts = EventTestUtil.now();
     UUID commitId =
-        coordinatorTest(ImmutableList.of(EventTestUtil.createDataFile()), ImmutableList.of(), ts);
+        coordinatorTest(
+            ImmutableList.of(EventTestUtil.createDataFile("path/to/reset-file.parquet")),
+            ImmutableList.of(),
+            ts);
 
     table.refresh();
     assertThat(table.snapshots()).hasSize(2);

@@ -28,6 +28,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -311,6 +313,14 @@ class Coordinator extends Channel {
             .map(envelope -> (DataWritten) envelope.event().payload())
             .collect(Collectors.toList());
 
+    Set<UUID> committedCommitIds =
+        controlTopicReset ? committedCommitIdsForTable(table, branch) : Set.of();
+
+    payloads =
+        payloads.stream()
+            .filter(payload -> !committedCommitIds.contains(payload.commitId()))
+            .collect(Collectors.toList());
+
     List<DataFile> dataFiles =
         payloads.stream()
             .filter(payload -> payload.dataFiles() != null)
@@ -416,6 +426,22 @@ class Coordinator extends Channel {
             tableIdentifier, expectedOffsets, lastCommittedOffsets);
       }
     };
+  }
+
+  private Set<UUID> committedCommitIdsForTable(Table table, String branch) {
+    Snapshot snapshot = latestSnapshot(table, branch);
+    if (snapshot == null) {
+      return Set.of();
+    }
+
+    Iterable<Snapshot> branchAncestry =
+        SnapshotUtil.ancestorsOf(snapshot.snapshotId(), table::snapshot);
+    return Streams.stream(branchAncestry)
+        .filter(Objects::nonNull)
+        .map(ancestor -> ancestor.summary().get(COMMIT_ID_SNAPSHOT_PROP))
+        .filter(Objects::nonNull)
+        .map(UUID::fromString)
+        .collect(Collectors.toSet());
   }
 
   private <T> Predicate<T> distinctByKey(Function<? super T, ?> keyExtractor) {

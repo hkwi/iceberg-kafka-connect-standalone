@@ -481,3 +481,30 @@ Refresh procedure if the PR receives more commits before merge:
 When #16355 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16282: Skip replayed committed control events during recovery
+
+- Issue: https://github.com/apache/iceberg/issues/16282
+- Standalone handling: issue-driven local overlay commit on top of the existing local overlay stack
+
+This overlay prevents a coordinator recovery path from registering the same files twice when an
+Iceberg table commit succeeds but the coordinator crashes before committing the control-topic
+consumer offsets. In that window, the next coordinator may re-consume the same `DataWritten` event.
+When control-topic offsets appear lower than the offsets stored in the latest table snapshot, the
+coordinator now treats `DataWritten` events whose `commitId` is already present in the table snapshot
+ancestry as replayed and skips them before building append or row-delta operations.
+
+The fix intentionally uses the Kafka Connect commit ID recorded in Iceberg snapshot properties,
+rather than file-path scanning, because the Kafka transaction cannot atomically include the external
+Iceberg commit. The snapshot commit ID is the connector's idempotence marker for the external side
+effect, while still allowing a real control-topic reset with new commit IDs to write new files.
+
+The standalone integration preserves existing local channel overlays:
+
+1. #16360 control-topic reset recovery still allows new commit IDs after a reset.
+2. #16434 bounded commit retry remains unchanged.
+3. #16366 retriable transactional commit handling remains unchanged.
+4. #16843 robust coordinator cleanup remains unchanged.
+
+When upstream adds a fix for #16282, run `scripts/sync-upstream.sh`, compare the upstream approach
+against this commit-id replay filter, and drop or refresh this local overlay accordingly.
