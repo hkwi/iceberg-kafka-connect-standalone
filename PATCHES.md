@@ -758,3 +758,39 @@ Refresh procedure if #15961 receives more commits before merge:
 
 When #15961 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream metrics
 semantics against this adapted overlay, and drop or refresh this local commit/entry accordingly.
+
+## apache/iceberg#16504: Integration test log capture
+
+- PR: https://github.com/apache/iceberg/pull/16504
+- Captured PR head commit: 1738a02614b4ebbec0c4e999315400add01731e3
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay improves Kafka Connect runtime integration-test diagnostics. The
+`integrationTest` task now writes per-test stdout/stderr to
+`build/testlogs/iceberg-kafka-connect-runtime-integration.log`, uses full
+exception logging, and passes `dockerLogDir` to the test JVM. `TestContext`
+attaches Testcontainers log consumers for the `connect`, `kafka`, and `iceberg`
+services so container stdout is captured as `build/testlogs/*-container.log`.
+
+The standalone adaptation also adds the explicit `org.awaitility:awaitility`
+integration-test dependency that Apache carries via its version catalog. The
+Apache PR also extends `.github/workflows/kafka-connect-ci.yml` artifact upload
+paths. This standalone repository does not carry that workflow; any future
+standalone CI workflow should upload both `build/testlogs` and
+`build/reports/tests/integrationTest`.
+
+Refresh procedure if #16504 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16504 and compare its `kafka-connect/build.gradle`,
+   `TestContext`, and workflow changes against this standalone overlay.
+3. Re-apply the integration-test logging behavior to the standalone root
+   `build.gradle` and runtime integration test sources.
+4. Run `./gradlew -q :iceberg-kafka-connect-runtime:tasks --all` and, when the
+   local Iceberg runtime artifacts are available, `./gradlew -q
+   :iceberg-kafka-connect-runtime:compileIntegrationJava`.
+5. Amend or replace the standalone #16504 overlay commit.
+
+When #16504 is merged into upstream main, run `scripts/sync-upstream.sh`, compare
+upstream's integration-test logging with this standalone adaptation, and drop or
+refresh this local commit/entry accordingly.

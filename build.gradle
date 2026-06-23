@@ -20,6 +20,7 @@
 ext {
   icebergVersion = findProperty('icebergVersion') ?: '1.12.0-SNAPSHOT'
   avroVersion = '1.12.1'
+  awaitilityVersion = '4.3.0'
   awsSdkVersion = '2.46.10'
   azureSdkVersion = '1.3.7'
   bsonVersion = '4.11.5'
@@ -239,6 +240,7 @@ project(':iceberg-kafka-connect-runtime') {
     integrationImplementation "org.apache.kafka:connect-api:${kafkaVersion}"
     integrationImplementation "org.apache.kafka:connect-json:${kafkaVersion}"
     integrationImplementation "org.testcontainers:testcontainers:${testcontainersVersion}"
+    integrationImplementation "org.awaitility:awaitility:${awaitilityVersion}"
     integrationImplementation "org.apache.httpcomponents.client5:httpclient5:${httpClientVersion}"
   }
 
@@ -246,6 +248,34 @@ project(':iceberg-kafka-connect-runtime') {
     useJUnitPlatform()
     testClassesDirs = sourceSets.integration.output.classesDirs
     classpath = sourceSets.integration.runtimeClasspath
+
+    def logDir = "${rootDir}/build/testlogs"
+    def logFile = "${logDir}/${project.name}-integration.log"
+    mkdir(logDir)
+    delete(logFile)
+    systemProperty 'dockerLogDir', logDir
+    def buildLog = new File(logFile)
+    addTestOutputListener(new TestOutputListener() {
+      def lastDescriptor
+
+      @Override
+      void onOutput(TestDescriptor testDescriptor, TestOutputEvent testOutputEvent) {
+        if (lastDescriptor != testDescriptor) {
+          buildLog << "--------\n- Test log for: " << testDescriptor << "\n--------\n"
+          lastDescriptor = testDescriptor
+        }
+        buildLog << testOutputEvent.destination << " " << testOutputEvent.message
+      }
+    })
+
+    testLogging {
+      if (System.getenv('CI') != null) {
+        events "started", "passed", "skipped", "failed"
+      } else {
+        events "failed"
+      }
+      exceptionFormat "full"
+    }
   }
 
   processResources {
