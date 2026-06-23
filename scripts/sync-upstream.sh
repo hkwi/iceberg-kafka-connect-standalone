@@ -113,6 +113,11 @@ if [[ -n "${current_upstream_commit}" ]] && git -C "${iceberg_dir}" cat-file -e 
   git -C "${iceberg_dir}" diff --binary "${current_upstream_commit}" "${upstream_commit}" -- \
     kafka-connect gradle/wrapper gradlew > "${patch_file}"
 
+  if [[ ! -s "${patch_file}" ]]; then
+    echo "No kafka-connect, Gradle wrapper, or gradlew changes between ${current_upstream_commit} and ${upstream_commit}"
+    exit 0
+  fi
+
   sed \
     -e 's# a/kafka-connect/# a/upstream/kafka-connect/#g' \
     -e 's# b/kafka-connect/# b/upstream/kafka-connect/#g' \
