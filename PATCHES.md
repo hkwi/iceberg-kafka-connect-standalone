@@ -283,3 +283,27 @@ Refresh procedure if the PR receives more commits before merge:
 When #16602 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16604: Mongo array timestamp and date conversion
+
+- PR: https://github.com/apache/iceberg/pull/16604
+- Captured PR head commit: b9aad0fc8fb90201b3d77af4e2c838ed78fc9aff
+- Local Apache checkout commit: 41a56c613 Kafka Connect: Apply Mongo array temporal fix from PR #16604
+- Standalone handling: one overlay commit on top of the existing local overlay stack
+
+This overlay fixes `MongoDataConverter` array conversion for BSON DATE_TIME and
+TIMESTAMP values. Array elements now use `asDateTime().getValue()` for epoch
+millis and `asTimestamp().getTime()` for timestamp seconds, matching the scalar
+conversion paths instead of reading the values through integer accessors.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16604-mongo-array-temporals` commit from the latest PR diff.
+3. Copy or re-apply the affected Mongo transform source and test files into
+   `upstream/kafka-connect/` here.
+4. Amend or replace the standalone #16604 overlay commit.
+
+When #16604 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
