@@ -117,3 +117,39 @@ Refresh procedure if the PR receives more commits before merge:
 When #16156 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify whether the remaining diff is only the retained warning
 message context, and then drop or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16366: Retriable transactional commit failures during rebalance
+
+- PR: https://github.com/apache/iceberg/pull/16366
+- Captured PR head commit: f7e62c8e87d26f236c46df1eaac89f5bade8e3be
+- Local Apache checkout commit: 1eb597e23 Kafka Connect: Apply retriable rebalance commit handling from PR #16366
+- Standalone handling: one overlay commit on top of the #14618, #11623, #15027, #16434, and #16156 overlay commits
+
+This overlay translates configured transactional producer commit failures to
+`RetriableException` so Kafka Connect can re-deliver the batch after a rebalance
+settles. The default configured classes match PR #16366: `CommitFailedException`,
+`InvalidProducerEpochException`, and `ProducerFencedException`.
+
+The standalone integration preserves prior overlays while applying this PR:
+
+1. `CommitterImpl` keeps #14618 errant-record reporter setup and #16156
+   synchronous coordinator shutdown.
+2. `SinkWriter.close()` follows the #11623 `RecordRouter` shape and only adds
+   `sourceOffsets.clear()`; there is no local `writers` map to clear.
+3. `IcebergSinkConfig` keeps the #14618 error tolerance, #11623 routing, and
+   #16434 bounded commit retry settings alongside the new retriable exception
+   list.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16366-retriable-rebalance-commit` commit from the latest
+   PR diff.
+3. Re-apply the overlapping files on top of the existing standalone overlays,
+   preserving the three integration points listed above.
+4. Copy or re-apply the affected `kafka-connect/` files into `upstream/kafka-connect/` here.
+5. Amend or replace the standalone #16366 overlay commit.
+
+When #16366 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.

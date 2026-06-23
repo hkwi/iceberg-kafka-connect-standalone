@@ -30,6 +30,7 @@ import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -202,7 +203,16 @@ public class CommitterImpl implements Committer {
           String.format("Coordinator unexpectedly terminated on committer %s", taskId));
     }
     if (worker != null) {
-      worker.process();
+      try {
+        worker.process();
+      } catch (RetriableException retriableException) {
+        LOG.info(
+            "Committer {} got retriable exception while processing control events. This can happen during re-balance.",
+            taskId,
+            retriableException.getCause());
+        stopWorker();
+        throw retriableException;
+      }
     }
   }
 

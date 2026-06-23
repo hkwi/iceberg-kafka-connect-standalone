@@ -22,7 +22,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.events.AvroUtil;
@@ -37,6 +36,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +53,7 @@ abstract class Channel {
   private final Admin admin;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
+  private final List<Class<? extends Throwable>> retriableCommitExceptions;
 
   Channel(
       String name,
@@ -70,6 +71,7 @@ abstract class Channel {
     this.admin = clientFactory.createAdmin();
 
     this.producerId = UUID.randomUUID().toString();
+    this.retriableCommitExceptions = config.transactionalCommitRetriableExceptionClasses();
   }
 
   protected void send(Event event) {
@@ -90,11 +92,13 @@ abstract class Channel {
                   // key by producer ID to keep event order
                   return new ProducerRecord<>(controlTopic, producerId, data);
                 })
-            .collect(Collectors.toList());
+            .toList();
 
     synchronized (producer) {
-      producer.beginTransaction();
+      boolean transactionStarted = false;
       try {
+        producer.beginTransaction();
+        transactionStarted = true;
         // NOTE: we shouldn't call get() on the future in a transactional context,
         // see docs for org.apache.kafka.clients.producer.KafkaProducer
         recordList.forEach(producer::send);
@@ -104,14 +108,59 @@ abstract class Channel {
         }
         producer.commitTransaction();
       } catch (Exception e) {
-        try {
-          producer.abortTransaction();
-        } catch (Exception ex) {
-          LOG.warn("Error aborting producer transaction", ex);
+        safeAbortTransaction(transactionStarted);
+        if (isRecoverableCommitError(e)) {
+          // The transactional commit hit a configured-recoverable failure (default: a
+          // consumer-group re-balance — CommitFailedException — or a producer-epoch bump —
+          // InvalidProducerEpochException / ProducerFencedException). The transaction was
+          // aborted, so source offsets did not advance — when Connect re-delivers the same
+          // batch (after the worker is closed and re-created with a fresh producer epoch via
+          // initTransactions(), and the affected partitions are reassigned) processing resumes
+          // from the last committed offsets with no data loss.
+          LOG.warn(
+              "Transactional offset commit failed with recoverable exception; "
+                  + "aborted transaction and signalling Connect to retry",
+              e);
+          throw new RetriableException(
+              "Transactional offset commit failed due to consumer group re-balance", e);
         }
         throw e;
       }
     }
+  }
+
+  private void safeAbortTransaction(boolean transactionStarted) {
+    if (!transactionStarted) {
+      return;
+    }
+    try {
+      producer.abortTransaction();
+    } catch (Exception ex) {
+      LOG.warn("Error aborting producer transaction", ex);
+    }
+  }
+
+  /**
+   * Returns true when the throwable (or any cause in its chain) matches one of the configured
+   * {@code iceberg.kafka.transactional-commit-retriable-exceptions} classes — i.e. a transient
+   * commit-time failure that should be translated to {@link RetriableException} so Connect pauses
+   * the consumer, lets the worker close + recreate (which obtains a fresh producer epoch via {@code
+   * initTransactions()}), and re-delivers the same batch.
+   */
+  private boolean isRecoverableCommitError(Throwable throwable) {
+    if (retriableCommitExceptions.isEmpty()) {
+      return false;
+    }
+    Throwable cause = throwable;
+    while (cause != null) {
+      for (Class<? extends Throwable> klass : retriableCommitExceptions) {
+        if (klass.isInstance(cause)) {
+          return true;
+        }
+      }
+      cause = cause.getCause();
+    }
+    return false;
   }
 
   protected abstract boolean receive(Envelope envelope);

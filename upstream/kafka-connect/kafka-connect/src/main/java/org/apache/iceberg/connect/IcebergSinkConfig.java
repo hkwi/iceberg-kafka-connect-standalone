@@ -28,6 +28,7 @@ import java.util.Properties;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.iceberg.IcebergBuild;
+import org.apache.iceberg.common.DynClasses;
 import org.apache.iceberg.connect.data.ErrorTolerance;
 import org.apache.iceberg.connect.data.RecordRouter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
@@ -115,6 +116,13 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String COMMIT_MAX_CONSECUTIVE_FAILURES_PROP =
       "iceberg.control.commit.max-consecutive-failures";
   private static final int COMMIT_MAX_CONSECUTIVE_FAILURES_DEFAULT = 1;
+  private static final String TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP =
+      "iceberg.kafka.transactional-commit-retriable-exceptions";
+  private static final List<String> DEFAULT_TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS =
+      ImmutableList.of(
+          "org.apache.kafka.clients.consumer.CommitFailedException",
+          "org.apache.kafka.common.errors.InvalidProducerEpochException",
+          "org.apache.kafka.common.errors.ProducerFencedException");
 
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
@@ -270,6 +278,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         COMMIT_MAX_CONSECUTIVE_FAILURES_DEFAULT,
         Importance.MEDIUM,
         "Maximum number of consecutive commit failures before the coordinator terminates");
+    configDef.define(
+        TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP,
+        ConfigDef.Type.LIST,
+        DEFAULT_TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS,
+        Importance.LOW,
+        "Comma-separated list of fully qualified Throwable class names raised by the producer transaction commit that should be translated to RetriableException");
     return configDef;
   }
 
@@ -281,6 +295,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newConcurrentMap();
   private final JsonConverter jsonConverter;
+  private volatile List<Class<? extends Throwable>> transactionalCommitRetriableExceptions;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, originalProps);
@@ -470,6 +485,57 @@ public class IcebergSinkConfig extends AbstractConfig {
     }
 
     return "";
+  }
+
+  public List<Class<? extends Throwable>> transactionalCommitRetriableExceptionClasses() {
+    List<Class<? extends Throwable>> resolved = transactionalCommitRetriableExceptions;
+    if (resolved != null) {
+      return resolved;
+    }
+
+    synchronized (this) {
+      if (transactionalCommitRetriableExceptions == null) {
+        transactionalCommitRetriableExceptions =
+            resolveExceptionClasses(getList(TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP));
+      }
+      return transactionalCommitRetriableExceptions;
+    }
+  }
+
+  private static List<Class<? extends Throwable>> resolveExceptionClasses(List<String> names) {
+    if (names == null || names.isEmpty()) {
+      return ImmutableList.of();
+    }
+
+    ImmutableList.Builder<Class<? extends Throwable>> builder = ImmutableList.builder();
+    for (String name : names) {
+      String trimmed = name == null ? "" : name.trim();
+      if (trimmed.isEmpty()) {
+        continue;
+      }
+
+      Class<?> klass = DynClasses.builder().impl(trimmed).orNull().build();
+      if (klass == null) {
+        LOG.warn(
+            "Ignoring entry '{}' in {}: class not found on classpath",
+            trimmed,
+            TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP);
+        continue;
+      }
+
+      if (Throwable.class.isAssignableFrom(klass)) {
+        @SuppressWarnings("unchecked")
+        Class<? extends Throwable> throwableClass = (Class<? extends Throwable>) klass;
+        builder.add(throwableClass);
+      } else {
+        LOG.warn(
+            "Ignoring entry '{}' in {}: class is not a Throwable subtype",
+            trimmed,
+            TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP);
+      }
+    }
+
+    return builder.build();
   }
 
   public String hadoopConfDir() {

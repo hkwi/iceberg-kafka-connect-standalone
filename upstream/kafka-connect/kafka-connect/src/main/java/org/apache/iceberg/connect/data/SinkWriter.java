@@ -76,6 +76,7 @@ public class SinkWriter {
 
   public void close() {
     router.close();
+    sourceOffsets.clear();
   }
 
   public SinkWriterResult completeWrite() {
