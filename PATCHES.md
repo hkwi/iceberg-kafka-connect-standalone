@@ -307,3 +307,38 @@ Refresh procedure if the PR receives more commits before merge:
 When #16604 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16072: Auto-create namespace AccessDenied handling
+
+- PR: https://github.com/apache/iceberg/pull/16072
+- Captured PR head commit: 37d7de0f1edc20212f58bcc70b412c59bb331687
+- Local Apache checkout commit: 54f5f8d3f Kafka Connect: Apply auto-create AccessDenied fix from PR #16072
+- Standalone handling: Kafka Connect overlay commit plus an Iceberg dependency requirement
+
+This overlay changes Kafka Connect auto-create namespace handling to check each
+namespace level with `namespaceExists()` before calling `createNamespace()`. That
+avoids calling Glue `CreateDatabase` for namespaces that already exist, which is
+important when the connector principal can read the Glue database but lacks
+`glue:CreateDatabase` permission.
+
+The Apache PR also changes `aws/GlueCatalog` so AWS SDK `AccessDeniedException`
+from `createNamespace()` is wrapped as Iceberg `ForbiddenException`. That source
+is not part of this standalone repository; it lives in the `iceberg-aws` artifact
+used by the runtime build. For full #16072 behavior, build the runtime with an
+Iceberg dependency set that includes the local Apache checkout commit listed
+above, or with an upstream release after #16072 is merged.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16072-auto-create-access-denied` commit from the latest PR diff.
+3. Re-apply or copy the Kafka Connect `IcebergWriterFactory` source and test files into
+   `upstream/kafka-connect/` here.
+4. Re-publish the Iceberg dependency artifacts from the refreshed Apache checkout if the
+   `aws/GlueCatalog` part is needed in local runtime builds.
+5. Amend or replace the standalone #16072 overlay commit.
+
+When #16072 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, ensure the
+runtime uses an Iceberg artifact containing the GlueCatalog fix, and drop or
+refresh this overlay commit/entry accordingly.
