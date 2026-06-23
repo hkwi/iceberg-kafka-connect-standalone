@@ -77,6 +77,56 @@ public class TestIcebergSinkConfig {
   }
 
   @Test
+  public void testConnectGroupIdUsesConsumerOverrideGroupId() {
+    Map<String, String> props =
+        ImmutableMap.<String, String>builder()
+            .put("iceberg.catalog.type", "rest")
+            .put("topics", "source-topic")
+            .put("iceberg.tables", "db.landing")
+            .put("name", "connector-name")
+            .put("consumer.override.group.id", "source-consumer-group")
+            .put("iceberg.connect.group-id", "deprecated-connect-group")
+            .build();
+
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+
+    assertThat(config.connectGroupId()).isEqualTo("source-consumer-group");
+  }
+
+  @Test
+  public void testConnectGroupIdUsesWorkerConsumerGroupId() {
+    Map<String, String> props =
+        ImmutableMap.<String, String>builder()
+            .put("iceberg.catalog.type", "rest")
+            .put("topics", "source-topic")
+            .put("iceberg.tables", "db.landing")
+            .put("name", "connector-name")
+            .put("iceberg.kafka.consumer.group.id", "worker-consumer-group")
+            .put("iceberg.connect.group-id", "deprecated-connect-group")
+            .build();
+
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+
+    assertThat(config.connectGroupId()).isEqualTo("worker-consumer-group");
+  }
+
+  @Test
+  public void testConnectGroupIdIgnoresDeprecatedConnectGroupId() {
+    Map<String, String> props =
+        ImmutableMap.<String, String>builder()
+            .put("iceberg.catalog.type", "rest")
+            .put("topics", "source-topic")
+            .put("iceberg.tables", "db.landing")
+            .put("name", "connector-name")
+            .put("iceberg.connect.group-id", "deprecated-connect-group")
+            .build();
+
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+
+    assertThat(config.connectGroupId()).isEqualTo("connect-connector-name");
+  }
+
+  @Test
   public void testStringToList() {
     List<String> result = IcebergSinkConfig.stringToList(null, ",");
     assertThat(result).isEmpty();

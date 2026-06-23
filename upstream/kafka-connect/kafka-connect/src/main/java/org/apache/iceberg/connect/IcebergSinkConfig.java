@@ -92,7 +92,9 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String COMMIT_TIMEOUT_MS_PROP = "iceberg.control.commit.timeout-ms";
   private static final int COMMIT_TIMEOUT_MS_DEFAULT = 30_000;
   private static final String COMMIT_THREADS_PROP = "iceberg.control.commit.threads";
-  private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
+  @Deprecated private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
+  private static final String CONSUMER_OVERRIDE_GROUP_ID_PROP = "consumer.override.group.id";
+  private static final String WORKER_CONSUMER_GROUP_ID_PROP = "consumer.group.id";
   private static final String TRANSACTIONAL_PREFIX_PROP =
       "iceberg.coordinator.transactional.prefix";
   private static final String CONTROL_POLL_INTERVAL_MS_PROP = "iceberg.control.poll.interval-ms";
@@ -237,7 +239,8 @@ public class IcebergSinkConfig extends AbstractConfig {
         ConfigDef.Type.STRING,
         null,
         Importance.LOW,
-        "Name of the Connect consumer group, should not be set under normal conditions");
+        "Deprecated: ignored by the connector. The source consumer group is derived from "
+            + "consumer.override.group.id, worker consumer config, or the connector name.");
     configDef.define(
         COMMIT_INTERVAL_MS_PROP,
         ConfigDef.Type.INT,
@@ -469,9 +472,22 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
   public String connectGroupId() {
-    String result = getString(CONNECT_GROUP_ID_PROP);
-    if (result != null) {
-      return result;
+    if (getString(CONNECT_GROUP_ID_PROP) != null) {
+      LOG.warn(
+          "Property '{}' is deprecated and ignored. The source consumer group is derived from "
+              + "'{}', worker consumer config, or the connector name.",
+          CONNECT_GROUP_ID_PROP,
+          CONSUMER_OVERRIDE_GROUP_ID_PROP);
+    }
+
+    String connectorOverride = originalProps.get(CONSUMER_OVERRIDE_GROUP_ID_PROP);
+    if (connectorOverride != null) {
+      return connectorOverride;
+    }
+
+    String workerConsumerGroupId = kafkaProps.get(WORKER_CONSUMER_GROUP_ID_PROP);
+    if (workerConsumerGroupId != null) {
+      return workerConsumerGroupId;
     }
 
     String connectorName = connectorName();

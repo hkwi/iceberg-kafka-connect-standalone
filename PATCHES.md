@@ -635,3 +635,36 @@ Refresh procedure if #15651 or #15710 receives more commits before merge:
 When an upstream stale-`DataWritten` fix is merged into main, run `scripts/sync-upstream.sh`, compare
 sequence-number ordering, offset snapshot semantics, and replay filtering, then drop or refresh this
 local commit/entry accordingly.
+
+
+## apache/iceberg#15969: Derive connect group id from source consumer group
+
+- PR: https://github.com/apache/iceberg/pull/15969
+- Captured PR head commit: 8e73e7fa93a8745222674d0f7983c9cc9b0176a2
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay deprecates `iceberg.connect.group-id` as an input to coordinator election and offset
+metadata namespacing. The connector now derives `connectGroupId()` from the actual source consumer
+group configuration: first `consumer.override.group.id`, then worker-level `consumer.group.id`, and
+finally Kafka Connect's default `connect-<connector name>` group. A configured
+`iceberg.connect.group-id` is accepted for compatibility but ignored with a warning, preventing a
+misconfigured value from causing coordinator election or committed-offset lookup to use a different
+group than the sink task's source consumer.
+
+The standalone integration intentionally differs from the raw PR by not preserving the deprecated
+value as a fallback, because doing so would keep the misconfiguration class that #15969 is intended
+to remove. Tests cover connector override precedence, worker consumer config fallback, and ignoring
+the deprecated property.
+
+Refresh procedure if #15969 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #15969 and compare its `IcebergSinkConfig.connectGroupId()` behavior against this
+   adapted overlay.
+3. Preserve the local decision that `iceberg.connect.group-id` is deprecated and ignored unless
+   upstream explicitly resolves the semantics differently.
+4. Run `TestIcebergSinkConfig` plus `./gradlew -q :iceberg-kafka-connect:test`.
+5. Amend or replace the standalone #15969 overlay commit.
+
+When #15969 is merged into upstream main, run `scripts/sync-upstream.sh`, compare the deprecated
+property semantics, and drop or refresh this local commit/entry accordingly.
