@@ -260,3 +260,26 @@ Refresh procedure if the PR receives more commits before merge:
 When #16828 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16602: Per-instance KafkaMetadataTransform configuration
+
+- PR: https://github.com/apache/iceberg/pull/16602
+- Captured PR head commit: 4592ea64daac62370bf77e8bd53dc3e8b9f3c8a3
+- Local Apache checkout commit: a4a3765ad Kafka Connect: Apply metadata transform config fix from PR #16602
+- Standalone handling: one overlay commit on top of the existing local overlay stack
+
+This overlay changes `KafkaMetadataTransform.recordAppender` from a static field
+to an instance field so one transform instance's `configure()` call cannot leak
+its metadata field configuration into another instance.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16602-transform-instance-config` commit from the latest PR diff.
+3. Copy or re-apply the affected transform source and test files into
+   `upstream/kafka-connect/` here.
+4. Amend or replace the standalone #16602 overlay commit.
+
+When #16602 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
