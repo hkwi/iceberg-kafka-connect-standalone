@@ -23,8 +23,9 @@ usage() {
   cat <<'USAGE'
 Usage: sync-upstream.sh [--iceberg-repo URL] [--iceberg-ref REF] [--local-iceberg DIR]
 
-Copies kafka-connect/ from apache/iceberg into upstream/kafka-connect and records
-the upstream commit in UPSTREAM.md.
+Applies kafka-connect changes from apache/iceberg to upstream/kafka-connect and
+records the upstream commit in UPSTREAM.md. Existing standalone overlay changes
+are preserved by applying the upstream old-to-new diff on top of the current tree.
 
 Options:
   --iceberg-repo URL  Upstream repository. Defaults to
@@ -83,18 +84,49 @@ else
 fi
 
 upstream_commit="$(git -C "${iceberg_dir}" rev-parse "${iceberg_ref}^{commit}")"
+current_upstream_commit=""
+if [[ -f "${repo_root}/UPSTREAM.md" ]]; then
+  current_upstream_commit="$(sed -n 's/^- Commit: //p' "${repo_root}/UPSTREAM.md")"
+fi
 
 if [[ ! -d "${iceberg_dir}/kafka-connect" ]]; then
   echo "No kafka-connect directory found in ${iceberg_dir}" >&2
   exit 1
 fi
 
+if [[ "${current_upstream_commit}" == "${upstream_commit}" ]]; then
+  echo "apache/iceberg is already synced at ${upstream_commit}"
+  exit 0
+fi
+
 mkdir -p "${repo_root}/upstream"
 mkdir -p "${repo_root}/gradle"
-rsync -a --delete --exclude build/ --exclude bin/ --exclude .gradle/ "${iceberg_dir}/kafka-connect/" "${repo_root}/upstream/kafka-connect/"
-rsync -a --delete "${iceberg_dir}/gradle/wrapper/" "${repo_root}/gradle/wrapper/"
-cp "${iceberg_dir}/gradlew" "${repo_root}/gradlew"
-chmod +x "${repo_root}/gradlew"
+
+if [[ -n "${current_upstream_commit}" ]] && git -C "${iceberg_dir}" cat-file -e "${current_upstream_commit}^{commit}" 2>/dev/null; then
+  patch_file="$(mktemp)"
+  mapped_patch_file="$(mktemp)"
+  cleanup() {
+    rm -f "${patch_file}" "${mapped_patch_file}"
+  }
+  trap cleanup EXIT
+
+  git -C "${iceberg_dir}" diff --binary "${current_upstream_commit}" "${upstream_commit}" -- \
+    kafka-connect gradle/wrapper gradlew > "${patch_file}"
+
+  sed \
+    -e 's# a/kafka-connect/# a/upstream/kafka-connect/#g' \
+    -e 's# b/kafka-connect/# b/upstream/kafka-connect/#g' \
+    -e 's#^diff --git a/kafka-connect/#diff --git a/upstream/kafka-connect/#g' \
+    -e 's# b/kafka-connect/# b/upstream/kafka-connect/#g' \
+    -- "${patch_file}" > "${mapped_patch_file}"
+
+  git -C "${repo_root}" apply --3way --binary "${mapped_patch_file}"
+else
+  rsync -a --delete --exclude build/ --exclude bin/ --exclude .gradle/ "${iceberg_dir}/kafka-connect/" "${repo_root}/upstream/kafka-connect/"
+  rsync -a --delete "${iceberg_dir}/gradle/wrapper/" "${repo_root}/gradle/wrapper/"
+  cp "${iceberg_dir}/gradlew" "${repo_root}/gradlew"
+  chmod +x "${repo_root}/gradlew"
+fi
 
 cat > "${repo_root}/UPSTREAM.md" <<EOF
 # Upstream Apache Iceberg Snapshot
