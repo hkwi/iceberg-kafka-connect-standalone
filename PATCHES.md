@@ -828,3 +828,25 @@ Refresh procedure if #16655 receives more commits before merge:
 When #16655 is merged into upstream main, run `scripts/sync-upstream.sh`, compare
 upstream's `SinkWriter`-based optimization with this `RecordRouter` adaptation,
 and drop or refresh this local commit/entry accordingly.
+
+## apache/iceberg#16917: CommitToTable payload Javadoc
+
+- PR: https://github.com/apache/iceberg/pull/16917
+- Captured PR head commit: 44009509fd09f0b4f7d93c85fa47a1a9965e8a69
+- Standalone handling: one comment-only overlay commit on top of the existing local overlay stack
+
+This overlay corrects `CommitToTable` class Javadoc. The payload is emitted once
+per committed table and carries the table reference plus resulting snapshot ID;
+it is not the commit-cycle completion signal. `CommitComplete` remains the event
+that marks the end of a commit cycle.
+
+Refresh procedure if #16917 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16917 and compare its events Javadoc against this overlay.
+3. Re-apply only comment/documentation changes to the standalone events source.
+4. Run `./gradlew -q :iceberg-kafka-connect-events:compileJava`.
+5. Amend or replace the standalone #16917 overlay commit.
+
+When #16917 is merged into upstream main, run `scripts/sync-upstream.sh`, verify
+this comment-only diff is empty, and drop this local commit/entry.
