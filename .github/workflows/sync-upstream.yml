@@ -1,0 +1,69 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Sync Apache Iceberg
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      iceberg-ref:
+        description: Apache Iceberg ref to sync
+        required: true
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out standalone repository
+        uses: actions/checkout@v4
+
+      - name: Sync Apache Iceberg Kafka Connect sources
+        run: |
+          ref="${{ inputs['iceberg-ref'] || 'main' }}"
+          scripts/sync-upstream.sh --iceberg-ref "${ref}"
+
+      - name: Check whether sync changed files
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Open sync pull request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: sync/apache-iceberg
+          delete-branch: true
+          commit-message: |
+            Sync Kafka Connect from apache/iceberg
+          title: Sync Kafka Connect from apache/iceberg
+          body: |
+            Synchronizes the standalone Kafka Connect repository with the latest
+            selected Apache Iceberg upstream ref.
+
+            The upstream commit is recorded in `UPSTREAM.md`.

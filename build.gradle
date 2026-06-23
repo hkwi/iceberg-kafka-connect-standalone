@@ -1,0 +1,305 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+ext {
+  icebergVersion = findProperty('icebergVersion') ?: '1.12.0-SNAPSHOT'
+  avroVersion = '1.12.1'
+  awsSdkVersion = '2.46.10'
+  azureSdkVersion = '1.3.7'
+  bsonVersion = '4.11.5'
+  googleLibrariesVersion = '26.83.0'
+  hadoopVersion = '3.4.3'
+  hiveVersion = '2.3.10'
+  httpClientVersion = '5.6.1'
+  jacksonVersion = '2.22.0'
+  kafkaVersion = '3.9.2'
+  slf4jVersion = '2.0.18'
+  testcontainersVersion = '2.0.5'
+}
+
+allprojects {
+  group = 'org.apache.iceberg'
+  version = icebergVersion
+
+  repositories {
+    mavenLocal()
+    mavenCentral()
+  }
+}
+
+subprojects {
+  apply plugin: 'java-library'
+
+  java {
+    toolchain {
+      languageVersion = JavaLanguageVersion.of(17)
+    }
+  }
+
+  configurations {
+    testImplementation.extendsFrom compileOnly
+
+    all {
+      exclude group: 'javax.activation', module: 'activation'
+      exclude group: 'org.jetbrains', module: 'annotations'
+      exclude group: 'org.jspecify', module: 'jspecify'
+      exclude group: 'org.mortbay.jetty'
+      exclude group: 'org.slf4j', module: 'slf4j-log4j12'
+
+      resolutionStrategy {
+        force 'org.codehaus.jettison:jettison:1.5.5'
+        force 'org.xerial.snappy:snappy-java:1.1.10.8'
+        force 'org.apache.commons:commons-compress:1.28.0'
+        force 'org.apache.hadoop.thirdparty:hadoop-shaded-guava:1.5.0'
+        force 'com.fasterxml.woodstox:woodstox-core:6.7.0'
+        force 'commons-beanutils:commons-beanutils:1.11.0'
+        force 'io.grpc:grpc-netty-shaded:1.82.0'
+      }
+    }
+  }
+
+  tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+  }
+}
+
+project(':iceberg-kafka-connect-events') {
+  dependencies {
+    api "org.apache.iceberg:iceberg-api:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-core:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-common:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-bundled-guava:${icebergVersion}"
+    implementation "org.apache.avro:avro:${avroVersion}"
+  }
+}
+
+project(':iceberg-kafka-connect') {
+  dependencies {
+    api "org.apache.iceberg:iceberg-api:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-core:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-common:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-bundled-guava:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-data:${icebergVersion}"
+    implementation project(':iceberg-kafka-connect-events')
+    implementation platform("com.fasterxml.jackson:jackson-bom:${jacksonVersion}")
+    implementation 'com.fasterxml.jackson.core:jackson-core'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation "org.apache.avro:avro:${avroVersion}"
+
+    compileOnly "org.apache.kafka:kafka-clients:${kafkaVersion}"
+    compileOnly "org.apache.kafka:connect-api:${kafkaVersion}"
+    compileOnly "org.apache.kafka:connect-json:${kafkaVersion}"
+
+    testImplementation "org.apache.hadoop:hadoop-client:${hadoopVersion}"
+    testRuntimeOnly "org.apache.iceberg:iceberg-parquet:${icebergVersion}"
+    testRuntimeOnly "org.apache.iceberg:iceberg-orc:${icebergVersion}"
+  }
+}
+
+project(':iceberg-kafka-connect-transforms') {
+  dependencies {
+    implementation "org.apache.iceberg:iceberg-bundled-guava:${icebergVersion}"
+    implementation "org.mongodb:bson:${bsonVersion}"
+    implementation "org.slf4j:slf4j-api:${slf4jVersion}"
+    compileOnly "org.apache.kafka:kafka-clients:${kafkaVersion}"
+    compileOnly "org.apache.kafka:connect-api:${kafkaVersion}"
+    compileOnly "org.apache.kafka:connect-json:${kafkaVersion}"
+    compileOnly "org.apache.kafka:connect-transforms:${kafkaVersion}"
+  }
+}
+
+project(':iceberg-kafka-connect-runtime') {
+  apply plugin: 'distribution'
+
+  configurations {
+    hive {
+      extendsFrom runtimeClasspath
+    }
+    integrationImplementation.extendsFrom testImplementation
+    integrationRuntime.extendsFrom testRuntimeOnly
+  }
+
+  sourceSets {
+    integration {
+      java.srcDir "$projectDir/src/integration/java"
+      resources.srcDir "$projectDir/src/integration/resources"
+    }
+  }
+
+  dependencies {
+    implementation project(':iceberg-kafka-connect')
+    implementation project(':iceberg-kafka-connect-transforms')
+    implementation("org.apache.hadoop:hadoop-common:${hadoopVersion}") {
+      exclude group: 'log4j'
+      exclude group: 'org.slf4j'
+      exclude group: 'ch.qos.reload4j'
+      exclude group: 'org.apache.avro', module: 'avro'
+      exclude group: 'com.google.guava'
+      exclude group: 'com.google.protobuf'
+      exclude group: 'org.apache.curator'
+      exclude group: 'org.apache.zookeeper'
+      exclude group: 'org.apache.kerby'
+      exclude group: 'org.apache.hadoop', module: 'hadoop-auth'
+      exclude group: 'org.apache.commons', module: 'commons-configuration2'
+      exclude group: 'org.apache.hadoop.thirdparty', module: 'hadoop-shaded-protobuf_3_7'
+      exclude group: 'org.eclipse.jetty'
+    }
+    implementation "org.apache.iceberg:iceberg-orc:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-parquet:${icebergVersion}"
+
+    implementation "org.apache.iceberg:iceberg-aws:${icebergVersion}"
+    implementation platform("software.amazon.awssdk:bom:${awsSdkVersion}")
+    implementation 'software.amazon.awssdk:apache-client'
+    implementation 'software.amazon.awssdk:auth'
+    implementation 'software.amazon.awssdk:http-auth-aws-crt'
+    implementation 'software.amazon.awssdk:iam'
+    implementation 'software.amazon.awssdk:sso'
+    implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:kms'
+    implementation 'software.amazon.awssdk:glue'
+    implementation 'software.amazon.awssdk:sts'
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'software.amazon.awssdk:lakeformation'
+
+    implementation "org.apache.iceberg:iceberg-gcp:${icebergVersion}"
+    implementation "org.apache.iceberg:iceberg-bigquery:${icebergVersion}"
+    implementation platform("com.google.cloud:libraries-bom:${googleLibrariesVersion}")
+    implementation 'com.google.cloud:google-cloud-storage'
+    implementation 'com.google.cloud:google-cloud-bigquery'
+    implementation 'com.google.cloud:google-cloud-core'
+
+    implementation "org.apache.iceberg:iceberg-azure:${icebergVersion}"
+    implementation platform("com.azure:azure-sdk-bom:${azureSdkVersion}")
+    implementation 'com.azure:azure-storage-file-datalake'
+    implementation 'com.azure:azure-identity'
+
+    hive "org.apache.iceberg:iceberg-hive-metastore:${icebergVersion}"
+    hive("org.apache.hive:hive-metastore:${hiveVersion}") {
+      exclude group: 'org.apache.avro', module: 'avro'
+      exclude group: 'org.slf4j', module: 'slf4j-log4j12'
+      exclude group: 'org.pentaho'
+      exclude group: 'org.apache.hbase'
+      exclude group: 'org.apache.logging.log4j'
+      exclude group: 'co.cask.tephra'
+      exclude group: 'com.google.code.findbugs', module: 'jsr305'
+      exclude group: 'org.eclipse.jetty.aggregate', module: 'jetty-all'
+      exclude group: 'org.eclipse.jetty.orbit', module: 'javax.servlet'
+      exclude group: 'org.apache.parquet', module: 'parquet-hadoop-bundle'
+      exclude group: 'com.tdunning', module: 'json'
+      exclude group: 'javax.transaction', module: 'transaction-api'
+      exclude group: 'com.zaxxer', module: 'HikariCP'
+      exclude group: 'org.apache.hadoop', module: 'hadoop-yarn-server-common'
+      exclude group: 'org.apache.hadoop', module: 'hadoop-yarn-server-applicationhistoryservice'
+      exclude group: 'org.apache.hadoop', module: 'hadoop-yarn-server-resourcemanager'
+      exclude group: 'org.apache.hadoop', module: 'hadoop-yarn-server-web-proxy'
+      exclude group: 'org.apache.hive', module: 'hive-service-rpc'
+      exclude group: 'com.github.joshelser', module: 'dropwizard-metrics-hadoop-metrics2-reporter'
+    }
+    hive("org.apache.hadoop:hadoop-client:${hadoopVersion}") {
+      exclude group: 'org.apache.avro', module: 'avro'
+      exclude group: 'org.slf4j', module: 'slf4j-log4j12'
+    }
+
+    integrationImplementation "org.apache.iceberg:iceberg-api:${icebergVersion}"
+    integrationImplementation "org.apache.iceberg:iceberg-common:${icebergVersion}"
+    integrationImplementation "org.apache.iceberg:iceberg-core:${icebergVersion}"
+    integrationImplementation "org.apache.iceberg:iceberg-bundled-guava:${icebergVersion}"
+    integrationImplementation platform("com.fasterxml.jackson:jackson-bom:${jacksonVersion}")
+    integrationImplementation 'com.fasterxml.jackson.core:jackson-core'
+    integrationImplementation 'com.fasterxml.jackson.core:jackson-databind'
+    integrationImplementation "org.apache.kafka:kafka-clients:${kafkaVersion}"
+    integrationImplementation "org.apache.kafka:connect-api:${kafkaVersion}"
+    integrationImplementation "org.apache.kafka:connect-json:${kafkaVersion}"
+    integrationImplementation "org.testcontainers:testcontainers:${testcontainersVersion}"
+    integrationImplementation "org.apache.httpcomponents.client5:httpclient5:${httpClientVersion}"
+  }
+
+  tasks.register('integrationTest', Test) {
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.integration.output.classesDirs
+    classpath = sourceSets.integration.runtimeClasspath
+  }
+
+  processResources {
+    filter {
+      it.replace('__VERSION__', project.version.toString())
+    }
+  }
+
+  distributions {
+    main {
+      contents {
+        from "${processResources.destinationDir}/manifest.json"
+        into('lib/') {
+          from configurations.runtimeClasspath
+        }
+        into('doc/') {
+          from "$projectDir/main/LICENSE"
+          from "$projectDir/main/NOTICE"
+        }
+        into('assets/') {
+          from "${processResources.destinationDir}/iceberg.png"
+        }
+      }
+    }
+    hive {
+      contents {
+        from "${processResources.destinationDir}/manifest.json"
+        into('lib/') {
+          from configurations.hive
+        }
+        into('doc/') {
+          from "$projectDir/hive/LICENSE"
+          from "$projectDir/hive/NOTICE"
+        }
+        into('assets/') {
+          from "${processResources.destinationDir}/iceberg.png"
+        }
+      }
+    }
+  }
+
+  tasks.named('jar').configure {
+    enabled = false
+  }
+
+  tasks.named('distTar').configure {
+    enabled = false
+  }
+  tasks.named('distZip').configure {
+    dependsOn processResources
+  }
+  tasks.named('installDist').configure {
+    dependsOn processResources
+  }
+
+  tasks.named('hiveDistTar').configure {
+    enabled = false
+  }
+  tasks.named('hiveDistZip').configure {
+    dependsOn processResources
+  }
+  tasks.named('installHiveDist').configure {
+    dependsOn processResources
+  }
+
+  tasks.named('assemble').configure {
+    dependsOn distZip, hiveDistZip
+  }
+}

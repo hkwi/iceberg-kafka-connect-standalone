@@ -1,0 +1,6 @@
+.gradle/
+.upstream-cache/
+build/
+out/
+*.iml
+upstream/kafka-connect/**/build/
