@@ -92,3 +92,28 @@ Refresh procedure if the PR receives more commits before merge:
 When #16434 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the overlay diff is now empty or intentionally changed,
 and drop this overlay commit/entry.
+
+## apache/iceberg#16156: Synchronous coordinator shutdown
+
+- PR: https://github.com/apache/iceberg/pull/16156
+- Captured PR head commit: 60a460783cc847cc02b81d86ffed4684263ad3c2
+- Local Apache checkout commit: 5b2c1c0d8 Kafka Connect: Apply synchronous coordinator stop from PR #16156
+- Standalone handling: one overlay commit on top of the #14618, #11623, #15027, and #16434 overlay commits
+
+This overlay joins the coordinator thread during shutdown so a revoked leader task
+finishes coordinator cleanup before another coordinator can be elected. The PR's
+unrelated removal of `taskId` from the defensive close warning is intentionally
+not included so logs retain the committer identity.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16156-zombie-coordinator` commit from the latest PR diff.
+3. Re-apply the shutdown change on top of the existing standalone overlays so
+   `CommitterImpl` keeps the #14618 errant-record reporter setup.
+4. Copy or re-apply the affected `kafka-connect/` files into `upstream/kafka-connect/` here.
+5. Amend or replace the standalone #16156 overlay commit.
+
+When #16156 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify whether the remaining diff is only the retained warning
+message context, and then drop or refresh this overlay commit/entry accordingly.
