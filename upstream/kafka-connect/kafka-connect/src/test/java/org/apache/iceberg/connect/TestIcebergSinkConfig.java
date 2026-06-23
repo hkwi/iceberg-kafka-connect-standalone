@@ -110,4 +110,40 @@ public class TestIcebergSinkConfig {
     result = IcebergSinkConfig.checkClassName("org.apache.kafka.clients.producer.KafkaProducer");
     assertThat(result).isFalse();
   }
+
+  @Test
+  public void testControlPollIntervalMsDefault() {
+    Map<String, String> props =
+        ImmutableMap.of(
+            "iceberg.catalog.type", "rest",
+            "topics", "source-topic",
+            "iceberg.tables", "db.landing");
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+    assertThat(config.controlPollIntervalMs()).isEqualTo(100);
+  }
+
+  @Test
+  public void testControlPollIntervalMsCustom() {
+    Map<String, String> props =
+        ImmutableMap.of(
+            "iceberg.catalog.type", "rest",
+            "topics", "source-topic",
+            "iceberg.tables", "db.landing",
+            "iceberg.control.poll.interval-ms", "500");
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+    assertThat(config.controlPollIntervalMs()).isEqualTo(500);
+  }
+
+  @Test
+  public void testControlPollIntervalMsTooSmall() {
+    Map<String, String> props =
+        ImmutableMap.of(
+            "iceberg.catalog.type", "rest",
+            "topics", "source-topic",
+            "iceberg.tables", "db.landing",
+            "iceberg.control.poll.interval-ms", "0");
+    assertThatThrownBy(() -> new IcebergSinkConfig(props))
+        .isInstanceOf(ConfigException.class)
+        .hasMessageContaining("Value must be at least 10");
+  }
 }

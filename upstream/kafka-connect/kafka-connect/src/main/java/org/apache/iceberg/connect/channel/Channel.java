@@ -49,7 +49,7 @@ abstract class Channel {
   private final Producer<String, byte[]> producer;
   private final Consumer<String, byte[]> consumer;
   private final SinkTaskContext context;
-  private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
+  private final Map<Integer, Long> controlTopicOffsets = Maps.newConcurrentMap();
   private final String producerId;
   private final List<Class<? extends Throwable>> retriableCommitExceptions;
 
@@ -197,11 +197,21 @@ abstract class Channel {
     consumer.commitSync(offsetsToCommit);
   }
 
-  void start() {
-    consumer.subscribe(ImmutableList.of(controlTopic));
+  protected void initializeConsumer() {
+    if (consumer.subscription().isEmpty()) {
+      consumer.subscribe(ImmutableList.of(controlTopic));
+    }
 
     // initial poll with longer duration so the consumer will initialize...
     consumeAvailable(Duration.ofSeconds(1));
+  }
+
+  void start() {
+    initializeConsumer();
+  }
+
+  protected void wakeupConsumer() {
+    consumer.wakeup();
   }
 
   void stop() {

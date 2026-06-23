@@ -508,3 +508,41 @@ The standalone integration preserves existing local channel overlays:
 
 When upstream adds a fix for #16282, run `scripts/sync-upstream.sh`, compare the upstream approach
 against this commit-id replay filter, and drop or refresh this local overlay accordingly.
+
+## apache/iceberg#16084: Decouple worker control-topic polling from record processing
+
+- PR: https://github.com/apache/iceberg/pull/16084
+- Related issue: https://github.com/apache/iceberg/issues/14818
+- Captured PR head commit: 6cb20637fef5bef5cff348784c322be00ee27678
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay moves the worker's control-topic consumer polling out of the main record-processing
+path. The worker now owns a background control-topic polling thread, buffers `START_COMMIT` events
+in a thread-safe queue, and drains that queue from `Worker.process()`. This avoids the previous
+`consumeAvailable(Duration.ZERO)` hot-path poll, which could starve control consumer group join,
+heartbeat, or rebalance progress and produce symptoms like #14818's intermittent
+`UNKNOWN_MEMBER_ID`/missed heartbeat behavior.
+
+The standalone integration intentionally differs from the raw PR in a few places to preserve local
+overlays and current channel behavior:
+
+1. `Channel.stop()` keeps #16843 failure aggregation while exposing `initializeConsumer()` and
+   `wakeupConsumer()` for the worker poller.
+2. `CommitterImpl.processControlEvents()` preserves #16366 retriable handling and additionally stops
+   the worker when async control polling fails.
+3. `Worker.stop()` still aggregates shutdown failures from background polling, channel close, and
+   `SinkWriter.close()`.
+4. Tests avoid adding Awaitility to the standalone build and use a small local wait helper instead.
+
+Refresh procedure if #16084 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16084 and compare its `Channel`, `Worker`, `CommitterImpl`, and config changes
+   against this adapted overlay.
+3. Re-apply only the async control-topic polling semantics needed by standalone, preserving #14618,
+   #16366, #16843, and #16282 behavior.
+4. Run `./gradlew -q :iceberg-kafka-connect:test` from this repository.
+5. Amend or replace the standalone #16084 overlay commit.
+
+When #16084 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream's worker
+polling implementation against this adapted overlay, and drop or refresh this local commit/entry.

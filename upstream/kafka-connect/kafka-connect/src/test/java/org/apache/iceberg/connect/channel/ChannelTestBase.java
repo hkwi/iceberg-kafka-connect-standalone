@@ -103,6 +103,7 @@ public class ChannelTestBase {
     when(config.connectGroupId()).thenReturn(CONNECT_CONSUMER_GROUP_ID);
     when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
     when(config.commitMaxConsecutiveFailures()).thenReturn(3);
+    when(config.controlPollIntervalMs()).thenReturn(100);
 
     TopicPartitionInfo partitionInfo = mock(TopicPartitionInfo.class);
     when(partitionInfo.partition()).thenReturn(0);
@@ -133,6 +134,7 @@ public class ChannelTestBase {
   }
 
   protected void initConsumer() {
+    consumer.subscribe(ImmutableList.of(CTL_TOPIC_NAME));
     TopicPartition tp = new TopicPartition(CTL_TOPIC_NAME, 0);
     consumer.rebalance(ImmutableList.of(tp));
     consumer.updateBeginningOffsets(ImmutableMap.of(tp, 0L));

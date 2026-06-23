@@ -26,7 +26,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 import java.util.UUID;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.data.IcebergWriterResult;
@@ -82,12 +84,11 @@ public class TestWorker extends ChannelTestBase {
       SinkWriter sinkWriter = mock(SinkWriter.class);
       when(sinkWriter.completeWrite()).thenReturn(sinkWriterResult);
 
+      initConsumer();
+
       Worker worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
       verify(clientFactory, never()).createAdmin();
-
-      // init consumer after subscribe()
-      initConsumer();
 
       // save a record
       Map<String, Object> value = ImmutableMap.of();
@@ -98,6 +99,8 @@ public class TestWorker extends ChannelTestBase {
       Event commitRequest = new Event(config.connectGroupId(), new StartCommit(commitId));
       byte[] bytes = AvroUtil.encode(commitRequest);
       consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", bytes));
+
+      waitUntil(() -> worker.pendingEventCount() > 0);
 
       worker.process();
 
@@ -114,6 +117,24 @@ public class TestWorker extends ChannelTestBase {
       assertThat(dataComplete.commitId()).isEqualTo(commitId);
       assertThat(dataComplete.assignments()).hasSize(1);
       assertThat(dataComplete.assignments().get(0).offset()).isEqualTo(1L);
+
+      worker.stop();
     }
+  }
+
+  private static void waitUntil(BooleanSupplier condition) {
+    long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+    while (System.nanoTime() < deadline) {
+      if (condition.getAsBoolean()) {
+        return;
+      }
+      try {
+        Thread.sleep(10);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError("Interrupted while waiting for async control event", e);
+      }
+    }
+    assertThat(condition.getAsBoolean()).isTrue();
   }
 }

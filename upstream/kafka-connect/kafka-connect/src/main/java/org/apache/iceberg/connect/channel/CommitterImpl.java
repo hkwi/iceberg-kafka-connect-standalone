@@ -255,6 +255,10 @@ public class CommitterImpl implements Committer {
             retriableException.getCause());
         stopWorker();
         throw retriableException;
+      } catch (RuntimeException e) {
+        LOG.error("Committer {} worker failed while processing control events", taskId, e);
+        stopWorker();
+        throw e;
       }
     }
   }
