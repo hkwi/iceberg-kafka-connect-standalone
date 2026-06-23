@@ -342,3 +342,38 @@ When #16072 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, ensure the
 runtime uses an Iceberg artifact containing the GlueCatalog fix, and drop or
 refresh this overlay commit/entry accordingly.
+
+## apache/iceberg#16843: Robust sink cleanup on shutdown failures
+
+- PR: https://github.com/apache/iceberg/pull/16843
+- Captured PR head commit: c852c178abdb7d12e28d27ce1ef841ca15333d05
+- Local Apache checkout commit: 7020ff8e5 Kafka Connect: Apply robust cleanup from PR #16843
+- Standalone handling: one overlay commit integrated with the existing local cleanup and retry overlays
+
+This overlay makes shutdown cleanup continue after failures in committer, worker,
+coordinator, producer, or consumer close paths. The original failure is still
+propagated to Kafka Connect, but later cleanup steps are no longer skipped. It
+also removes the unused channel-level `AdminClient` and waits for the coordinator
+thread to finish from `CoordinatorThread.terminate()`.
+
+The standalone integration preserves existing local overlays while applying this PR:
+
+1. `CommitterImpl.startWorker()` keeps the #14618 errant-record reporter setup.
+2. `CommitterImpl.processControlEvents()` keeps the #16366 retriable rebalance
+   handling that stops the worker and rethrows `RetriableException`.
+3. `Channel.send()` keeps the #16366 transactional commit retry translation.
+4. The #16156 coordinator join behavior moves from `CommitterImpl.stopCoordinator()`
+   to the #16843 `CoordinatorThread.terminate()` implementation.
+
+Refresh procedure if the PR receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Rebuild the local `pr-16843-robust-sink-cleanup` commit from the latest PR diff.
+3. Re-apply the affected Kafka Connect files on top of the existing standalone overlays,
+   preserving the four integration points listed above.
+4. Run the #16843 channel tests plus `TestChannelRetry` to verify #16366 remains intact.
+5. Amend or replace the standalone #16843 overlay commit.
+
+When #16843 is merged into upstream main, run `scripts/sync-upstream.sh` from
+this repository, verify the remaining diff against the local overlays, and drop
+or refresh this overlay commit/entry accordingly.
