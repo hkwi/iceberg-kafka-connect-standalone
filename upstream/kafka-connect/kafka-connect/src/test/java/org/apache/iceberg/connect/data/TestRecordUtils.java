@@ -19,15 +19,56 @@
 package org.apache.iceberg.connect.data;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.Map;
+import java.util.UUID;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.TableSinkConfig;
+import org.apache.iceberg.connect.events.TableReference;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
+import org.apache.iceberg.types.Types;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
+import org.apache.kafka.connect.errors.DataException;
 import org.junit.jupiter.api.Test;
 
 public class TestRecordUtils {
+
+  @Test
+  public void testCreateTableWriterMissingIdColumnThrowsDataException() {
+    org.apache.iceberg.Schema icebergSchema =
+        new org.apache.iceberg.Schema(
+            ImmutableList.of(Types.NestedField.required(1, "id", Types.LongType.get())),
+            ImmutableSet.of(1));
+
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(icebergSchema);
+    when(table.properties()).thenReturn(ImmutableMap.of());
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("missing_column"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.tableConfig(any())).thenReturn(tableConfig);
+    when(config.writeProps()).thenReturn(ImmutableMap.of());
+
+    TableReference tableReference =
+        TableReference.of("test_catalog", TableIdentifier.of("name"), UUID.randomUUID());
+
+    assertThatThrownBy(() -> RecordUtils.createTableWriter(table, tableReference, config))
+        .isInstanceOf(DataException.class)
+        .hasMessageContaining("ID column 'missing_column' not found in schema")
+        .hasMessageContaining("Available columns:");
+  }
 
   @Test
   public void testExtractFromRecordValueStruct() {

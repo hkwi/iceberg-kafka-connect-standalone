@@ -46,6 +46,9 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.types.Types.LongType;
 import org.apache.iceberg.types.Types.StringType;
+import org.apache.kafka.connect.data.SchemaBuilder;
+import org.apache.kafka.connect.data.Struct;
+import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -62,6 +65,7 @@ public class TestIcebergWriterFactory {
     when(catalog.loadTable(any())).thenThrow(new NoSuchTableException("no such table"));
 
     TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of());
     if (partitioned) {
       when(tableConfig.partitionBy()).thenReturn(ImmutableList.of("data"));
     }
@@ -101,6 +105,172 @@ public class TestIcebergWriterFactory {
     assertThat(capturedArguments.get(0)).isEqualTo(Namespace.of("foo1"));
     assertThat(capturedArguments.get(1)).isEqualTo(Namespace.of("foo1", "foo2"));
     assertThat(capturedArguments.get(2)).isEqualTo(Namespace.of("foo1", "foo2", "foo3"));
+  }
+
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testAutoCreateTableSetsIdentifierFieldIds() {
+    Catalog catalog = mock(Catalog.class, withSettings().extraInterfaces(SupportsNamespaces.class));
+    when(catalog.loadTable(any())).thenThrow(new NoSuchTableException("no such table"));
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.partitionBy()).thenReturn(ImmutableList.of());
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("id"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.autoCreateProps()).thenReturn(ImmutableMap.of());
+    when(config.tableConfig(any())).thenReturn(tableConfig);
+
+    org.apache.kafka.connect.data.Schema valueSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT64_SCHEMA)
+            .field("data", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+            .build();
+
+    SinkRecord record = mock(SinkRecord.class);
+    when(record.valueSchema()).thenReturn(valueSchema);
+    when(record.value()).thenReturn(new Struct(valueSchema).put("id", 1L).put("data", "value"));
+
+    IcebergWriterFactory factory = new IcebergWriterFactory(catalog, config);
+    factory.autoCreateTable("foo.bar", record);
+
+    ArgumentCaptor<Schema> schemaCaptor = ArgumentCaptor.forClass(Schema.class);
+    verify(catalog).createTable(any(), schemaCaptor.capture(), any(), any());
+
+    Schema schema = schemaCaptor.getValue();
+    assertThat(schema.identifierFieldIds()).containsExactly(schema.findField("id").fieldId());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testAutoCreateTableRejectsIdColumnsWithSchemaForceOptional() {
+    Catalog catalog = mock(Catalog.class, withSettings().extraInterfaces(SupportsNamespaces.class));
+    when(catalog.loadTable(any())).thenThrow(new NoSuchTableException("no such table"));
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.partitionBy()).thenReturn(ImmutableList.of());
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("id"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.autoCreateProps()).thenReturn(ImmutableMap.of());
+    when(config.tableConfig(any())).thenReturn(tableConfig);
+    when(config.schemaForceOptional()).thenReturn(true);
+
+    org.apache.kafka.connect.data.Schema valueSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT64_SCHEMA)
+            .build();
+
+    SinkRecord record = mock(SinkRecord.class);
+    when(record.valueSchema()).thenReturn(valueSchema);
+    when(record.value()).thenReturn(new Struct(valueSchema).put("id", 1L));
+
+    IcebergWriterFactory factory = new IcebergWriterFactory(catalog, config);
+
+    assertThatThrownBy(() -> factory.autoCreateTable("foo.bar", record))
+        .isInstanceOf(DataException.class)
+        .hasMessageContaining("schema-force-optional")
+        .hasMessageContaining("id-columns")
+        .hasMessageContaining("foo.bar");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testAutoCreateTableRejectsDottedPathIdColumn() {
+    Catalog catalog = mock(Catalog.class, withSettings().extraInterfaces(SupportsNamespaces.class));
+    when(catalog.loadTable(any())).thenThrow(new NoSuchTableException("no such table"));
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.partitionBy()).thenReturn(ImmutableList.of());
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("user.id"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.autoCreateProps()).thenReturn(ImmutableMap.of());
+    when(config.tableConfig(any())).thenReturn(tableConfig);
+
+    org.apache.kafka.connect.data.Schema valueSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT64_SCHEMA)
+            .build();
+
+    SinkRecord record = mock(SinkRecord.class);
+    when(record.valueSchema()).thenReturn(valueSchema);
+    when(record.value()).thenReturn(new Struct(valueSchema).put("id", 1L));
+
+    IcebergWriterFactory factory = new IcebergWriterFactory(catalog, config);
+
+    assertThatThrownBy(() -> factory.autoCreateTable("foo.bar", record))
+        .isInstanceOf(DataException.class)
+        .hasMessageContaining("user.id")
+        .hasMessageContaining("top-level")
+        .hasMessageContaining("foo.bar");
+  }
+
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testAutoCreateTableRejectsMissingIdColumn() {
+    Catalog catalog = mock(Catalog.class, withSettings().extraInterfaces(SupportsNamespaces.class));
+    when(catalog.loadTable(any())).thenThrow(new NoSuchTableException("no such table"));
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.partitionBy()).thenReturn(ImmutableList.of());
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("missing_col"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.autoCreateProps()).thenReturn(ImmutableMap.of());
+    when(config.tableConfig(any())).thenReturn(tableConfig);
+
+    org.apache.kafka.connect.data.Schema valueSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT64_SCHEMA)
+            .build();
+
+    SinkRecord record = mock(SinkRecord.class);
+    when(record.valueSchema()).thenReturn(valueSchema);
+    when(record.value()).thenReturn(new Struct(valueSchema).put("id", 1L));
+
+    IcebergWriterFactory factory = new IcebergWriterFactory(catalog, config);
+
+    assertThatThrownBy(() -> factory.autoCreateTable("foo.bar", record))
+        .isInstanceOf(DataException.class)
+        .hasMessageContaining("missing_col")
+        .hasMessageContaining("Available columns")
+        .hasMessageContaining("foo.bar");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testAutoCreateTableRejectsInvalidIdColumnsAsDataException() {
+    Catalog catalog = mock(Catalog.class, withSettings().extraInterfaces(SupportsNamespaces.class));
+    when(catalog.loadTable(any())).thenThrow(new NoSuchTableException("no such table"));
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.partitionBy()).thenReturn(ImmutableList.of());
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("score"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.autoCreateProps()).thenReturn(ImmutableMap.of());
+    when(config.tableConfig(any())).thenReturn(tableConfig);
+
+    org.apache.kafka.connect.data.Schema valueSchema =
+        SchemaBuilder.struct()
+            .field("score", org.apache.kafka.connect.data.Schema.FLOAT64_SCHEMA)
+            .build();
+
+    SinkRecord record = mock(SinkRecord.class);
+    when(record.valueSchema()).thenReturn(valueSchema);
+    when(record.value()).thenReturn(new Struct(valueSchema).put("score", 1.0));
+
+    IcebergWriterFactory factory = new IcebergWriterFactory(catalog, config);
+
+    assertThatThrownBy(() -> factory.autoCreateTable("foo.bar", record))
+        .isInstanceOf(DataException.class)
+        .hasMessageContaining("foo.bar")
+        .cause()
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("float or double");
   }
 
   @Test

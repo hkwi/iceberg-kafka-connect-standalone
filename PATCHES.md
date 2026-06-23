@@ -564,3 +564,35 @@ columns.
 When upstream adds a fix for #15344, run `scripts/sync-upstream.sh`, compare whether upstream keeps
 this existing-LONG behavior and the timestamp inference behavior, and drop or refresh this local
 overlay accordingly.
+
+## apache/iceberg#16598: Identifier field validation and auto-create schema alignment
+
+- PR: https://github.com/apache/iceberg/pull/16598
+- Captured PR head commit: 00c7e156abcd08e329ebd3d0600bbb9515c036e0
+- Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+This overlay makes auto-created tables honor configured `id-columns` by passing the matching field
+IDs into the Iceberg schema's identifier field set. It also rejects invalid identifier-field
+configurations earlier and consistently as Kafka Connect `DataException`s: dotted id-column paths,
+missing id columns, optional or floating-point identifier fields, and per-table `id-columns` used
+with `iceberg.tables.schema-force-optional=true`.
+
+The startup config validation also rejects the global combination of
+`iceberg.tables.schema-force-optional=true` with `iceberg.tables.default-id-columns`, because forced
+optional fields cannot satisfy Iceberg's required identifier field contract.
+
+The standalone integration keeps existing local overlays unchanged and applies #16598 only around
+`IcebergSinkConfig`, `IcebergWriterFactory`, and `RecordUtils` error handling.
+
+Refresh procedure if #16598 receives more commits before merge:
+
+1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
+2. Re-read PR #16598 and compare its config validation, auto-create schema construction, and
+   `RecordUtils.createTableWriter` error contract against this overlay.
+3. Re-apply the identifier-field behavior on top of the standalone overlay stack without changing
+   routing, DLQ, or coordinator recovery behavior.
+4. Run the focused config/writer/record utility tests plus `./gradlew -q :iceberg-kafka-connect:test`.
+5. Amend or replace the standalone #16598 overlay commit.
+
+When #16598 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream's
+identifier-field validation against this overlay, and drop or refresh this local commit/entry.
