@@ -20,14 +20,12 @@ package org.apache.iceberg.connect.data;
 
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -43,17 +41,13 @@ import org.apache.iceberg.connect.TableSinkConfig;
 import org.apache.iceberg.inmemory.InMemoryCatalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
-import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.TimestampType;
-import org.apache.kafka.connect.errors.DataException;
-import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 public class TestSinkWriter {
 
@@ -112,23 +106,6 @@ public class TestSinkWriter {
   }
 
   @Test
-  public void testTopicRoute() {
-    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
-    when(tableConfig.routeRegex()).thenReturn(Pattern.compile("topic"));
-
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tablesRouteWith()).thenAnswer(invocation -> RecordRouter.TopicRecordRouter.class);
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-    when(config.tableConfig(any())).thenReturn(tableConfig);
-
-    Map<String, Object> value = ImmutableMap.of();
-    List<IcebergWriterResult> writerResults = sinkWriterTest(value, config);
-    assertThat(writerResults.size()).isEqualTo(1);
-    IcebergWriterResult writerResult = writerResults.get(0);
-    assertThat(writerResult.tableIdentifier()).isEqualTo(TABLE_IDENTIFIER);
-  }
-
-  @Test
   public void testStaticRoute() {
     TableSinkConfig tableConfig = mock(TableSinkConfig.class);
     when(tableConfig.routeRegex()).thenReturn(Pattern.compile("val"));
@@ -174,37 +151,6 @@ public class TestSinkWriter {
     assertThat(writerResults).hasSize(1);
     IcebergWriterResult writerResult = writerResults.get(0);
     assertThat(writerResult.tableReference().identifier()).isEqualTo(TABLE_IDENTIFIER);
-  }
-
-  @Test
-  public void testMetricsTrackReceivedRecordsAndActiveWriters() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-
-    ConnectorMetrics metrics = ConnectorMetrics.create(null);
-    SinkWriter sinkWriter = new SinkWriter(catalog, config, metrics);
-
-    SinkRecord rec =
-        new SinkRecord(
-            "topic",
-            1,
-            null,
-            "key",
-            null,
-            ImmutableMap.of("id", 1L, "data", "value"),
-            100L);
-
-    sinkWriter.save(ImmutableList.of(rec));
-
-    assertThat(metrics.recordsReceivedTotal()).isEqualTo(1);
-    assertThat(metrics.recordsWrittenTotal()).isEqualTo(1);
-    assertThat(metrics.activeWriters()).isEqualTo(1);
-
-    SinkWriterResult result = sinkWriter.completeWrite();
-
-    assertThat(result.writerResults()).hasSize(1);
-    assertThat(metrics.activeWriters()).isEqualTo(0);
   }
 
   @Test
@@ -289,33 +235,8 @@ public class TestSinkWriter {
     assertThat(writerResults).hasSize(0);
   }
 
-  @Test
-  public void testEvolveAddsFractionalDecimalColumn() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-    when(config.evolveSchemaEnabled()).thenReturn(true);
-
-    // a new column whose value is a fractional decimal < 1: BigDecimal("0.001") has precision 1
-    // and scale 3, so before the fix the column evolves to a malformed decimal(1, 3) and the
-    // write below fails; after the fix it evolves to decimal(3, 3) and the record is written.
-    Map<String, Object> value = ImmutableMap.of("amount", new BigDecimal("0.001"));
-
-    List<IcebergWriterResult> writerResults = sinkWriterTest(value, config);
-    assertThat(writerResults).isNotEmpty();
-
-    // the column evolved to a valid decimal that can hold 0.001 (scale <= precision)
-    Type added = catalog.loadTable(TABLE_IDENTIFIER).schema().findType("amount");
-    assertThat(added).isEqualTo(Types.DecimalType.of(3, 3));
-  }
-
   private List<IcebergWriterResult> sinkWriterTest(
       Map<String, Object> value, IcebergSinkConfig config) {
-    return sinkWriterTest(value, config, null);
-  }
-
-  private List<IcebergWriterResult> sinkWriterTest(
-      Map<String, Object> value, IcebergSinkConfig config, ErrantRecordReporter reporter) {
     IcebergWriterResult writeResult =
         new IcebergWriterResult(
             TableIdentifier.parse(TABLE_NAME),
@@ -329,7 +250,7 @@ public class TestSinkWriter {
     when(writerFactory.createWriter(any(), any(), anyBoolean())).thenReturn(writer);
 
     SinkWriter sinkWriter = new SinkWriter(catalog, config);
-    sinkWriter.setReporter(reporter);
+
     // save a record
     Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
     SinkRecord rec =
@@ -353,70 +274,5 @@ public class TestSinkWriter {
     assertThat(offset.timestamp()).isEqualTo(now.atOffset(ZoneOffset.UTC));
 
     return result.writerResults();
-  }
-
-  @Test
-  public void testErrorToleranceAll() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.errorTolerance()).thenReturn(ErrorTolerance.ALL.toString());
-    when(config.errorLogIncludeMessages()).thenReturn(true);
-
-    Map<String, Object> badValue = ImmutableMap.of("id", "abc");
-    List<IcebergWriterResult> writerResults1 = sinkWriterTest(badValue, config);
-    assertThat(writerResults1.size()).isEqualTo(1);
-  }
-
-  @Test
-  public void testErrorToleranceNone() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.errorTolerance()).thenReturn(ErrorTolerance.NONE.toString());
-
-    Map<String, Object> badValue = ImmutableMap.of("id", "abc");
-    assertThatThrownBy(() -> sinkWriterTest(badValue, config))
-        .isInstanceOf(DataException.class)
-        .hasMessage("An error occurred converting record, topic: topic, partition, 1, offset: 100");
-  }
-
-  @Test
-  public void testErrorToleranceNoneErrorLogIncludeMessages() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.errorTolerance()).thenReturn(ErrorTolerance.NONE.toString());
-    when(config.errorLogIncludeMessages()).thenReturn(true);
-
-    Map<String, Object> badValue = ImmutableMap.of("id", "abc");
-    assertThatThrownBy(() -> sinkWriterTest(badValue, config))
-        .isInstanceOf(DataException.class)
-        .hasStackTraceContaining(
-            "Caused by: java.lang.NumberFormatException: For input string: \"abc\"\n")
-        .hasMessage(
-            "An error occurred converting record, topic: topic, partition, 1, offset: 100, record: {id=abc}");
-  }
-
-  @Test
-  public void testErrantRecordReporter() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
-    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.errorTolerance()).thenReturn(ErrorTolerance.ALL.toString());
-
-    ErrantRecordReporter reporter = mock(ErrantRecordReporter.class);
-    when(reporter.report(any(), any()))
-        .then(
-            invocation -> {
-              return null;
-            });
-
-    Map<String, Object> badValue = ImmutableMap.of("id", "abc");
-    List<IcebergWriterResult> writerResults1 = sinkWriterTest(badValue, config, reporter);
-    assertThat(writerResults1.size()).isEqualTo(1);
-
-    // Verify report function was called once
-    Mockito.verify(reporter, Mockito.times(1)).report(any(), any());
   }
 }

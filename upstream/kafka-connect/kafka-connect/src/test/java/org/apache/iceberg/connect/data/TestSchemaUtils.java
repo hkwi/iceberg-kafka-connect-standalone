@@ -62,9 +62,7 @@ import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StringType;
 import org.apache.iceberg.types.Types.StructType;
 import org.apache.iceberg.types.Types.TimeType;
-import org.apache.iceberg.types.Types.TimestampNanoType;
 import org.apache.iceberg.types.Types.TimestampType;
-import org.apache.iceberg.types.Types.UUIDType;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
@@ -273,45 +271,6 @@ public class TestSchemaUtils {
   }
 
   @Test
-  public void testToIcebergTypeAvroTemporalLogicalTypes() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-
-    // timestamp-micros / timestamp-nanos are UTC instants -> with zone
-    Type tsMicros = SchemaUtils.toIcebergType(namedInt64("timestamp-micros"), config);
-    assertThat(tsMicros).isInstanceOf(TimestampType.class);
-    assertThat(((TimestampType) tsMicros).shouldAdjustToUTC()).isTrue();
-
-    Type tsNanos = SchemaUtils.toIcebergType(namedInt64("timestamp-nanos"), config);
-    assertThat(tsNanos).isInstanceOf(TimestampNanoType.class);
-    assertThat(((TimestampNanoType) tsNanos).shouldAdjustToUTC()).isTrue();
-
-    // local-timestamp-* are zone-less -> without zone
-    Type localMillis = SchemaUtils.toIcebergType(namedInt64("local-timestamp-millis"), config);
-    assertThat(localMillis).isInstanceOf(TimestampType.class);
-    assertThat(((TimestampType) localMillis).shouldAdjustToUTC()).isFalse();
-
-    Type localMicros = SchemaUtils.toIcebergType(namedInt64("local-timestamp-micros"), config);
-    assertThat(localMicros).isInstanceOf(TimestampType.class);
-    assertThat(((TimestampType) localMicros).shouldAdjustToUTC()).isFalse();
-
-    Type localNanos = SchemaUtils.toIcebergType(namedInt64("local-timestamp-nanos"), config);
-    assertThat(localNanos).isInstanceOf(TimestampNanoType.class);
-    assertThat(((TimestampNanoType) localNanos).shouldAdjustToUTC()).isFalse();
-
-    // time-micros (int64) -> time
-    assertThat(SchemaUtils.toIcebergType(namedInt64("time-micros"), config))
-        .isInstanceOf(TimeType.class);
-
-    // an unrecognized named int64 still falls through to long
-    assertThat(SchemaUtils.toIcebergType(namedInt64("something-else"), config))
-        .isInstanceOf(LongType.class);
-  }
-
-  private static Schema namedInt64(String name) {
-    return SchemaBuilder.int64().name(name).build();
-  }
-
-  @Test
   public void testInferIcebergType() {
     IcebergSinkConfig config = mock(IcebergSinkConfig.class);
 
@@ -371,36 +330,5 @@ public class TestSchemaUtils {
     // skip infer for object if values are empty objects
     assertThat(SchemaUtils.inferIcebergType(ImmutableMap.of("nested", ImmutableMap.of()), config))
         .isNull();
-  }
-
-  @Test
-  public void testToIcebergTypeUUIDLogicalTypeOnString() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-
-    Schema uuidSchema = SchemaBuilder.string().name("uuid").build();
-    assertThat(SchemaUtils.toIcebergType(uuidSchema, config)).isInstanceOf(UUIDType.class);
-  }
-
-  @Test
-  public void testToIcebergTypeUUIDLogicalTypeOnBytes() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-
-    Schema uuidSchema = SchemaBuilder.bytes().name("uuid").build();
-    assertThat(SchemaUtils.toIcebergType(uuidSchema, config)).isInstanceOf(UUIDType.class);
-  }
-
-  @Test
-  public void testInferIcebergTypeSmallDecimal() {
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-
-    // BigDecimal("0.001") has precision 1, smaller than its scale 3;
-    // Iceberg requires scale <= precision, so precision is widened to the scale
-    assertThat(SchemaUtils.inferIcebergType(new BigDecimal("0.001"), config))
-        .isEqualTo(DecimalType.of(3, 3));
-
-    // BigDecimal("1E+2") has a negative scale (-2); normalized to scale 0,
-    // the same decimal(3, 0) as new BigDecimal("100")
-    assertThat(SchemaUtils.inferIcebergType(new BigDecimal("1E+2"), config))
-        .isEqualTo(DecimalType.of(3, 0));
   }
 }

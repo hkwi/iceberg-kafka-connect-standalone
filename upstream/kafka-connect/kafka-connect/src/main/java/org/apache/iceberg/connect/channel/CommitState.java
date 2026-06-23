@@ -19,9 +19,7 @@
 package org.apache.iceberg.connect.channel;
 
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -138,67 +136,11 @@ class CommitState {
     return false;
   }
 
-  Map<TableReference, List<CommitGroup>> tableCommitGroups() {
-    Map<TableReference, LinkedHashMap<UUID, List<Envelope>>> grouped = new LinkedHashMap<>();
-    for (Envelope envelope : commitBuffer) {
-      DataWritten dataWritten = (DataWritten) envelope.event().payload();
-      grouped
-          .computeIfAbsent(dataWritten.tableReference(), ignored -> new LinkedHashMap<>())
-          .computeIfAbsent(dataWritten.commitId(), ignored -> new ArrayList<>())
-          .add(envelope);
-    }
-
-    return grouped.entrySet().stream()
+  Map<TableReference, List<Envelope>> tableCommitMap() {
+    return commitBuffer.stream()
         .collect(
-            Collectors.toMap(
-                Map.Entry::getKey,
-                entry -> orderedCommitGroups(entry.getValue()),
-                (left, right) -> left,
-                LinkedHashMap::new));
-  }
-
-  private List<CommitGroup> orderedCommitGroups(LinkedHashMap<UUID, List<Envelope>> groups) {
-    List<CommitGroup> staleGroups = new ArrayList<>();
-    CommitGroup currentGroup = null;
-    for (Map.Entry<UUID, List<Envelope>> entry : groups.entrySet()) {
-      CommitGroup group =
-          new CommitGroup(
-              entry.getKey(), entry.getValue(), Objects.equals(currentCommitId, entry.getKey()));
-      if (group.currentCommit()) {
-        currentGroup = group;
-      } else {
-        staleGroups.add(group);
-      }
-    }
-
-    if (currentGroup != null) {
-      staleGroups.add(currentGroup);
-    }
-    return staleGroups;
-  }
-
-  static class CommitGroup {
-    private final UUID commitId;
-    private final List<Envelope> envelopes;
-    private final boolean currentCommit;
-
-    CommitGroup(UUID commitId, List<Envelope> envelopes, boolean currentCommit) {
-      this.commitId = commitId;
-      this.envelopes = envelopes;
-      this.currentCommit = currentCommit;
-    }
-
-    UUID commitId() {
-      return commitId;
-    }
-
-    List<Envelope> envelopes() {
-      return envelopes;
-    }
-
-    boolean currentCommit() {
-      return currentCommit;
-    }
+            Collectors.groupingBy(
+                envelope -> ((DataWritten) envelope.event().payload()).tableReference()));
   }
 
   OffsetDateTime validThroughTs(boolean partialCommit) {

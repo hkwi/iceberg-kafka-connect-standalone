@@ -18,103 +18,54 @@
  */
 package org.apache.iceberg.connect.data;
 
-import java.lang.reflect.InvocationTargetException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.errors.DataException;
-import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.connect.sink.SinkRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class SinkWriter {
-
-  private static final Logger LOG = LoggerFactory.getLogger(SinkWriter.class);
-
   private final IcebergSinkConfig config;
-  private final ConnectorMetrics metrics;
+  private final IcebergWriterFactory writerFactory;
+  private final Map<String, RecordWriter> writers;
   private final Map<TopicPartition, Offset> sourceOffsets;
-  private final RecordRouter router;
-  private ErrantRecordReporter reporter;
 
   public SinkWriter(Catalog catalog, IcebergSinkConfig config) {
-    this(catalog, config, ConnectorMetrics.NOOP);
-  }
-
-  public SinkWriter(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
     this.config = config;
-    this.metrics = metrics;
+    this.writerFactory = new IcebergWriterFactory(catalog, config);
+    this.writers = Maps.newHashMap();
     this.sourceOffsets = Maps.newHashMap();
-    if (config.dynamicTablesEnabled()) {
-      router = new RecordRouter.DynamicRecordRouter(catalog, config, metrics);
-    } else if (config.tablesRouteWith() == null && config.tablesRouteField() != null) {
-      router = new RecordRouter.StaticRecordRouter(catalog, config, metrics);
-    } else if (config.tablesRouteWith() != null) {
-      try {
-        router =
-            config
-                .tablesRouteWith()
-                .getDeclaredConstructor(Catalog.class, IcebergSinkConfig.class)
-                .newInstance(catalog, config);
-      } catch (NoSuchMethodException
-          | InstantiationException
-          | IllegalAccessException
-          | InvocationTargetException e) {
-        throw new IllegalArgumentException(
-            "Cannot create router from iceberg.tables.route-with", e);
-      }
-    } else {
-      router = new RecordRouter.AllTablesRecordRouter(catalog, config, metrics);
-    }
-    metrics.registerActiveWriters(router::activeWriterCount);
-  }
-
-  public void setReporter(ErrantRecordReporter reporter) {
-    this.reporter = reporter;
   }
 
   public void close() {
-    router.close();
-    sourceOffsets.clear();
+    writers.values().forEach(RecordWriter::close);
   }
 
   public SinkWriterResult completeWrite() {
-    List<IcebergWriterResult> writerResults = router.completeWrite();
+    List<IcebergWriterResult> writerResults =
+        writers.values().stream()
+            .flatMap(writer -> writer.complete().stream())
+            .collect(Collectors.toList());
     Map<TopicPartition, Offset> offsets = Maps.newHashMap(sourceOffsets);
 
-    router.clearWriters();
+    writers.clear();
     sourceOffsets.clear();
 
     return new SinkWriterResult(writerResults, offsets);
   }
 
   public void save(Collection<SinkRecord> sinkRecords) {
-    metrics.recordsReceived(sinkRecords.size());
-    for (SinkRecord record : sinkRecords) {
-      try {
-        this.save(record);
-      } catch (DataException ex) {
-        if (this.reporter != null) {
-          this.reporter.report(record, ex);
-        }
-        if (this.config.errorTolerance().equalsIgnoreCase(ErrorTolerance.ALL.toString())) {
-          LOG.error(
-              "Data exception encountered while saving record but tolerated due to error tolerance settings. "
-                  + "To change this behavior, set 'errors.tolerance' to 'none':",
-              ex);
-        } else {
-          throw ex;
-        }
-      }
-    }
+    sinkRecords.forEach(this::save);
   }
 
   private void save(SinkRecord record) {
@@ -131,6 +82,63 @@ public class SinkWriter {
         new TopicPartition(record.originalTopic(), record.originalKafkaPartition()),
         new Offset(record.originalKafkaOffset() + 1, timestamp));
 
-    router.routeRecord(record);
+    if (config.dynamicTablesEnabled()) {
+      routeRecordDynamically(record);
+    } else {
+      routeRecordStatically(record);
+    }
+  }
+
+  private void routeRecordStatically(SinkRecord record) {
+    String routeField = config.tablesRouteField();
+
+    if (routeField == null) {
+      // route to all tables
+      config
+          .tables()
+          .forEach(
+              tableName -> {
+                writerForTable(tableName, record, false).write(record);
+              });
+
+    } else {
+      String routeValue = extractRouteValue(record.value(), routeField);
+      if (routeValue != null) {
+        config
+            .tables()
+            .forEach(
+                tableName -> {
+                  Pattern regex = config.tableConfig(tableName).routeRegex();
+                  if (regex != null && regex.matcher(routeValue).matches()) {
+                    writerForTable(tableName, record, false).write(record);
+                  }
+                });
+      }
+    }
+  }
+
+  private void routeRecordDynamically(SinkRecord record) {
+    String routeField = config.tablesRouteField();
+    Preconditions.checkNotNull(routeField, "Route field cannot be null with dynamic routing");
+
+    String routeValue = extractRouteValue(record.value(), routeField);
+    if (routeValue != null) {
+      String tableName = routeValue.toLowerCase(Locale.ROOT);
+      writerForTable(tableName, record, true).write(record);
+    }
+  }
+
+  private String extractRouteValue(Object recordValue, String routeField) {
+    if (recordValue == null) {
+      return null;
+    }
+    Object routeValue = RecordUtils.extractFromRecordValue(recordValue, routeField);
+    return routeValue == null ? null : routeValue.toString();
+  }
+
+  private RecordWriter writerForTable(
+      String tableName, SinkRecord sample, boolean ignoreMissingTable) {
+    return writers.computeIfAbsent(
+        tableName, notUsed -> writerFactory.createWriter(tableName, sample, ignoreMissingTable));
   }
 }

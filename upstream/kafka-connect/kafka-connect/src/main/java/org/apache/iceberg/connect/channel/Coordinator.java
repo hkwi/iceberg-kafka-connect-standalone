@@ -28,8 +28,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -50,14 +48,12 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.data.ConnectorMetrics;
 import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
-import org.apache.iceberg.exceptions.CommitFailedException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.collect.Streams;
@@ -85,9 +81,7 @@ class Coordinator extends Channel {
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
   private final CommitState commitState;
-  private final ConnectorMetrics metrics;
   private final AtomicLong partialCommitFailures = new AtomicLong();
-  private int consecutiveCommitFailures;
   private volatile boolean terminated;
   private final String taskId;
 
@@ -97,16 +91,6 @@ class Coordinator extends Channel {
       Collection<MemberDescription> members,
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
-    this(catalog, config, members, clientFactory, context, ConnectorMetrics.NOOP);
-  }
-
-  Coordinator(
-      Catalog catalog,
-      IcebergSinkConfig config,
-      Collection<MemberDescription> members,
-      KafkaClientFactory clientFactory,
-      SinkTaskContext context,
-      ConnectorMetrics metrics) {
     // pass consumer group ID to which we commit low watermark offsets
     super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
 
@@ -126,10 +110,9 @@ class Coordinator extends Channel {
             new LinkedBlockingQueue<>(),
             new ThreadFactoryBuilder()
                 .setDaemon(true)
-                .setNameFormat("iceberg-committer-" + config.connectorName() + "-%d")
+                .setNameFormat("iceberg-committer" + "-%d")
                 .build());
     this.commitState = new CommitState(config);
-    this.metrics = metrics;
     this.taskId = config.connectorName() + "-" + config.taskId();
   }
 
@@ -146,7 +129,6 @@ class Coordinator extends Channel {
     consumeAvailable(POLL_DURATION);
 
     if (commitState.isCommitTimedOut()) {
-      metrics.commitTimedOut();
       commit(true);
     }
   }
@@ -168,16 +150,9 @@ class Coordinator extends Channel {
   }
 
   private void commit(boolean partialCommit) {
-    long startMs = System.currentTimeMillis();
-    metrics.commitStarted();
     try {
       doCommit(partialCommit);
-      metrics.commitSucceeded(System.currentTimeMillis() - startMs);
-      if (!partialCommit) {
-        consecutiveCommitFailures = 0;
-      }
     } catch (RuntimeException e) {
-      metrics.commitFailed(System.currentTimeMillis() - startMs);
       if (partialCommit) {
         partialCommitFailures.incrementAndGet();
         LOG.warn(
@@ -185,70 +160,26 @@ class Coordinator extends Channel {
             commitState.currentCommitId(),
             taskId,
             e);
-        return;
-      }
-
-      if (!isCommitFailedException(e)) {
+      } else {
+        LOG.error("Commit {} failed for task {}", commitState.currentCommitId(), taskId, e);
         throw e;
       }
-
-      consecutiveCommitFailures++;
-      if (consecutiveCommitFailures >= config.commitMaxConsecutiveFailures()) {
-        LOG.error(
-            "Commit {} failed for task {} ({} consecutive failures, terminating)",
-            commitState.currentCommitId(),
-            taskId,
-            consecutiveCommitFailures,
-            e);
-        throw e;
-      }
-
-      LOG.warn(
-          "Commit {} failed for task {} ({} consecutive failures, will retry)",
-          commitState.currentCommitId(),
-          taskId,
-          consecutiveCommitFailures,
-          e);
     } finally {
       commitState.endCurrentCommit();
     }
   }
 
-  private static boolean isCommitFailedException(Throwable throwable) {
-    Throwable current = throwable;
-    while (current != null) {
-      if (current instanceof CommitFailedException) {
-        return true;
-      }
-      current = current.getCause();
-    }
-    return false;
-  }
-
   private void doCommit(boolean partialCommit) {
-    Map<TableReference, List<CommitState.CommitGroup>> commitMap = commitState.tableCommitGroups();
+    Map<TableReference, List<Envelope>> commitMap = commitState.tableCommitMap();
     OffsetDateTime validThroughTs = commitState.validThroughTs(partialCommit);
-    Map<Integer, Long> currentControlTopicOffsets = controlTopicOffsets();
 
     Tasks.foreach(commitMap.entrySet())
         .executeWith(exec)
         .stopOnFailure()
         .run(
-            entry -> {
-              List<CommitState.CommitGroup> groups = entry.getValue();
-              for (int index = 0; index < groups.size(); index++) {
-                CommitState.CommitGroup group = groups.get(index);
-                boolean lastGroup = index == groups.size() - 1;
-                Map<Integer, Long> groupOffsets =
-                    lastGroup ? currentControlTopicOffsets : groupControlTopicOffsets(group);
+            entry ->
                 commitToTable(
-                    entry.getKey(),
-                    group.commitId(),
-                    group.envelopes(),
-                    groupOffsets,
-                    lastGroup ? validThroughTs : null);
-              }
-            });
+                    entry.getKey(), entry.getValue(), controlTopicOffsets(), validThroughTs));
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
@@ -268,15 +199,6 @@ class Coordinator extends Channel {
         validThroughTs);
   }
 
-  private Map<Integer, Long> groupControlTopicOffsets(CommitState.CommitGroup group) {
-    return group.envelopes().stream()
-        .collect(
-            Collectors.toMap(
-                Envelope::partition,
-                envelope -> envelope.offset() + 1,
-                Long::max));
-  }
-
   private String offsetsToJson(Map<Integer, Long> offsets) {
     try {
       return MAPPER.writeValueAsString(offsets);
@@ -288,7 +210,6 @@ class Coordinator extends Channel {
   @SuppressWarnings("checkstyle:CyclomaticComplexity")
   private void commitToTable(
       TableReference tableReference,
-      UUID commitId,
       List<Envelope> envelopeList,
       Map<Integer, Long> controlTopicOffsets,
       OffsetDateTime validThroughTs) {
@@ -316,30 +237,8 @@ class Coordinator extends Channel {
     // records for other partitions.  Merge the updated topic partitions with the last committed
     // offsets.
     Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(table, branch);
-
-    boolean controlTopicReset =
-        !committedOffsets.isEmpty()
-            && committedOffsets.entrySet().stream()
-                .anyMatch(
-                    e -> {
-                      Long current = controlTopicOffsets.get(e.getKey());
-                      return current != null && current < e.getValue();
-                    });
-
-    if (controlTopicReset) {
-      LOG.warn(
-          "Coordinator {}: detected possible Kafka cluster recreation for table {}. "
-              + "Control topic offsets {} are lower than previously committed offsets {}. "
-              + "Skipping offset deduplication and resetting stored offset baseline.",
-          taskId,
-          tableIdentifier,
-          controlTopicOffsets,
-          committedOffsets);
-    }
-
-    Map<Integer, Long> baseOffsets = buildBaseOffsets(committedOffsets, controlTopicOffsets);
     Map<Integer, Long> mergedOffsets =
-        Stream.of(baseOffsets, controlTopicOffsets)
+        Stream.of(committedOffsets, controlTopicOffsets)
             .flatMap(map -> map.entrySet().stream())
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, Long::max));
     String offsetsJson = offsetsToJson(mergedOffsets);
@@ -348,18 +247,10 @@ class Coordinator extends Channel {
         envelopeList.stream()
             .filter(
                 envelope -> {
-                  Long minOffset = baseOffsets.get(envelope.partition());
+                  Long minOffset = committedOffsets.get(envelope.partition());
                   return minOffset == null || envelope.offset() >= minOffset;
                 })
             .map(envelope -> (DataWritten) envelope.event().payload())
-            .collect(Collectors.toList());
-
-    Set<UUID> committedCommitIds =
-        controlTopicReset ? committedCommitIdsForTable(table, branch) : Set.of();
-
-    payloads =
-        payloads.stream()
-            .filter(payload -> !committedCommitIds.contains(payload.commitId()))
             .collect(Collectors.toList());
 
     List<DataFile> dataFiles =
@@ -394,7 +285,7 @@ class Coordinator extends Channel {
           appendOp.toBranch(branch);
         }
         appendOp.set(snapshotOffsetsProp, offsetsJson);
-        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitId.toString());
+        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
         appendOp.set(TASK_ID_SNAPSHOT_PROP, taskId);
         if (validThroughTs != null) {
           appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
@@ -408,7 +299,7 @@ class Coordinator extends Channel {
           deltaOp.toBranch(branch);
         }
         deltaOp.set(snapshotOffsetsProp, offsetsJson);
-        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitId.toString());
+        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
         deltaOp.set(TASK_ID_SNAPSHOT_PROP, taskId);
         if (validThroughTs != null) {
           deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
@@ -423,7 +314,7 @@ class Coordinator extends Channel {
           new Event(
               config.connectGroupId(),
               new CommitToTable(
-                  commitId, tableReference, snapshotId, validThroughTs));
+                  commitState.currentCommitId(), tableReference, snapshotId, validThroughTs));
       send(event);
 
       LOG.info(
@@ -431,20 +322,9 @@ class Coordinator extends Channel {
           taskId,
           tableIdentifier,
           snapshotId,
-          commitId,
+          commitState.currentCommitId(),
           validThroughTs);
     }
-  }
-
-  private Map<Integer, Long> buildBaseOffsets(
-      Map<Integer, Long> committedOffsets, Map<Integer, Long> controlTopicOffsets) {
-    return committedOffsets.entrySet().stream()
-        .filter(
-            e -> {
-              Long current = controlTopicOffsets.get(e.getKey());
-              return current == null || current >= e.getValue();
-            })
-        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
   }
 
   private SnapshotAncestryValidator offsetValidator(
@@ -467,22 +347,6 @@ class Coordinator extends Channel {
             tableIdentifier, expectedOffsets, lastCommittedOffsets);
       }
     };
-  }
-
-  private Set<UUID> committedCommitIdsForTable(Table table, String branch) {
-    Snapshot snapshot = latestSnapshot(table, branch);
-    if (snapshot == null) {
-      return Set.of();
-    }
-
-    Iterable<Snapshot> branchAncestry =
-        SnapshotUtil.ancestorsOf(snapshot.snapshotId(), table::snapshot);
-    return Streams.stream(branchAncestry)
-        .filter(Objects::nonNull)
-        .map(ancestor -> ancestor.summary().get(COMMIT_ID_SNAPSHOT_PROP))
-        .filter(Objects::nonNull)
-        .map(UUID::fromString)
-        .collect(Collectors.toSet());
   }
 
   private <T> Predicate<T> distinctByKey(Function<? super T, ?> keyExtractor) {

@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.events.AvroUtil;
@@ -29,13 +30,13 @@ import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,9 +50,9 @@ abstract class Channel {
   private final Producer<String, byte[]> producer;
   private final Consumer<String, byte[]> consumer;
   private final SinkTaskContext context;
-  private final Map<Integer, Long> controlTopicOffsets = Maps.newConcurrentMap();
+  private final Admin admin;
+  private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
-  private final List<Class<? extends Throwable>> retriableCommitExceptions;
 
   Channel(
       String name,
@@ -66,9 +67,9 @@ abstract class Channel {
     String transactionalId = config.transactionalPrefix() + name + config.transactionalSuffix();
     this.producer = clientFactory.createProducer(transactionalId);
     this.consumer = clientFactory.createConsumer(consumerGroupId);
+    this.admin = clientFactory.createAdmin();
 
     this.producerId = UUID.randomUUID().toString();
-    this.retriableCommitExceptions = config.transactionalCommitRetriableExceptionClasses();
   }
 
   protected void send(Event event) {
@@ -89,13 +90,11 @@ abstract class Channel {
                   // key by producer ID to keep event order
                   return new ProducerRecord<>(controlTopic, producerId, data);
                 })
-            .toList();
+            .collect(Collectors.toList());
 
     synchronized (producer) {
-      boolean transactionStarted = false;
+      producer.beginTransaction();
       try {
-        producer.beginTransaction();
-        transactionStarted = true;
         // NOTE: we shouldn't call get() on the future in a transactional context,
         // see docs for org.apache.kafka.clients.producer.KafkaProducer
         recordList.forEach(producer::send);
@@ -105,59 +104,14 @@ abstract class Channel {
         }
         producer.commitTransaction();
       } catch (Exception e) {
-        safeAbortTransaction(transactionStarted);
-        if (isRecoverableCommitError(e)) {
-          // The transactional commit hit a configured-recoverable failure (default: a
-          // consumer-group re-balance — CommitFailedException — or a producer-epoch bump —
-          // InvalidProducerEpochException / ProducerFencedException). The transaction was
-          // aborted, so source offsets did not advance — when Connect re-delivers the same
-          // batch (after the worker is closed and re-created with a fresh producer epoch via
-          // initTransactions(), and the affected partitions are reassigned) processing resumes
-          // from the last committed offsets with no data loss.
-          LOG.warn(
-              "Transactional offset commit failed with recoverable exception; "
-                  + "aborted transaction and signalling Connect to retry",
-              e);
-          throw new RetriableException(
-              "Transactional offset commit failed due to consumer group re-balance", e);
+        try {
+          producer.abortTransaction();
+        } catch (Exception ex) {
+          LOG.warn("Error aborting producer transaction", ex);
         }
         throw e;
       }
     }
-  }
-
-  private void safeAbortTransaction(boolean transactionStarted) {
-    if (!transactionStarted) {
-      return;
-    }
-    try {
-      producer.abortTransaction();
-    } catch (Exception ex) {
-      LOG.warn("Error aborting producer transaction", ex);
-    }
-  }
-
-  /**
-   * Returns true when the throwable (or any cause in its chain) matches one of the configured
-   * {@code iceberg.kafka.transactional-commit-retriable-exceptions} classes — i.e. a transient
-   * commit-time failure that should be translated to {@link RetriableException} so Connect pauses
-   * the consumer, lets the worker close + recreate (which obtains a fresh producer epoch via {@code
-   * initTransactions()}), and re-delivers the same batch.
-   */
-  private boolean isRecoverableCommitError(Throwable throwable) {
-    if (retriableCommitExceptions.isEmpty()) {
-      return false;
-    }
-    Throwable cause = throwable;
-    while (cause != null) {
-      for (Class<? extends Throwable> klass : retriableCommitExceptions) {
-        if (klass.isInstance(cause)) {
-          return true;
-        }
-      }
-      cause = cause.getCause();
-    }
-    return false;
   }
 
   protected abstract boolean receive(Envelope envelope);
@@ -197,52 +151,17 @@ abstract class Channel {
     consumer.commitSync(offsetsToCommit);
   }
 
-  protected void initializeConsumer() {
-    if (consumer.subscription().isEmpty()) {
-      consumer.subscribe(ImmutableList.of(controlTopic));
-    }
+  void start() {
+    consumer.subscribe(ImmutableList.of(controlTopic));
 
     // initial poll with longer duration so the consumer will initialize...
     consumeAvailable(Duration.ofSeconds(1));
   }
 
-  void start() {
-    initializeConsumer();
-  }
-
-  protected void wakeupConsumer() {
-    consumer.wakeup();
-  }
-
   void stop() {
     LOG.info("Channel stopping");
-    RuntimeException failure = null;
-
-    try {
-      producer.close();
-    } catch (RuntimeException e) {
-      failure = appendFailure(failure, e);
-      LOG.warn("Error closing channel producer", e);
-    }
-
-    try {
-      consumer.close();
-    } catch (RuntimeException e) {
-      failure = appendFailure(failure, e);
-      LOG.warn("Error closing channel consumer", e);
-    }
-
-    if (failure != null) {
-      throw failure;
-    }
-  }
-
-  static RuntimeException appendFailure(RuntimeException failure, RuntimeException next) {
-    if (failure == null) {
-      return next;
-    }
-
-    failure.addSuppressed(next);
-    return failure;
+    producer.close();
+    consumer.close();
+    admin.close();
   }
 }

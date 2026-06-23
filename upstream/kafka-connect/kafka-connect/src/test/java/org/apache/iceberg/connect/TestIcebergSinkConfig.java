@@ -29,23 +29,6 @@ import org.junit.jupiter.api.Test;
 
 public class TestIcebergSinkConfig {
 
-
-  @Test
-  public void testSchemaForceOptionalIncompatibleWithDefaultIdColumns() {
-    Map<String, String> props =
-        ImmutableMap.of(
-            "topics", "source-topic",
-            "iceberg.catalog.type", "rest",
-            "iceberg.tables", "db.landing",
-            "iceberg.tables.schema-force-optional", "true",
-            "iceberg.tables.default-id-columns", "id");
-    assertThatThrownBy(() -> new IcebergSinkConfig(props))
-        .isInstanceOf(ConfigException.class)
-        .hasMessageContaining("schema-force-optional")
-        .hasMessageContaining("default-id-columns")
-        .hasMessageContaining("incompatible");
-  }
-
   @Test
   public void testGetVersion() {
     String version = IcebergSinkConfig.version();
@@ -74,56 +57,6 @@ public class TestIcebergSinkConfig {
             "iceberg.tables", "db.landing");
     IcebergSinkConfig config = new IcebergSinkConfig(props);
     assertThat(config.commitIntervalMs()).isEqualTo(300_000);
-  }
-
-  @Test
-  public void testConnectGroupIdUsesConsumerOverrideGroupId() {
-    Map<String, String> props =
-        ImmutableMap.<String, String>builder()
-            .put("iceberg.catalog.type", "rest")
-            .put("topics", "source-topic")
-            .put("iceberg.tables", "db.landing")
-            .put("name", "connector-name")
-            .put("consumer.override.group.id", "source-consumer-group")
-            .put("iceberg.connect.group-id", "deprecated-connect-group")
-            .build();
-
-    IcebergSinkConfig config = new IcebergSinkConfig(props);
-
-    assertThat(config.connectGroupId()).isEqualTo("source-consumer-group");
-  }
-
-  @Test
-  public void testConnectGroupIdUsesWorkerConsumerGroupId() {
-    Map<String, String> props =
-        ImmutableMap.<String, String>builder()
-            .put("iceberg.catalog.type", "rest")
-            .put("topics", "source-topic")
-            .put("iceberg.tables", "db.landing")
-            .put("name", "connector-name")
-            .put("iceberg.kafka.consumer.group.id", "worker-consumer-group")
-            .put("iceberg.connect.group-id", "deprecated-connect-group")
-            .build();
-
-    IcebergSinkConfig config = new IcebergSinkConfig(props);
-
-    assertThat(config.connectGroupId()).isEqualTo("worker-consumer-group");
-  }
-
-  @Test
-  public void testConnectGroupIdIgnoresDeprecatedConnectGroupId() {
-    Map<String, String> props =
-        ImmutableMap.<String, String>builder()
-            .put("iceberg.catalog.type", "rest")
-            .put("topics", "source-topic")
-            .put("iceberg.tables", "db.landing")
-            .put("name", "connector-name")
-            .put("iceberg.connect.group-id", "deprecated-connect-group")
-            .build();
-
-    IcebergSinkConfig config = new IcebergSinkConfig(props);
-
-    assertThat(config.connectGroupId()).isEqualTo("connect-connector-name");
   }
 
   @Test
@@ -176,41 +109,5 @@ public class TestIcebergSinkConfig {
 
     result = IcebergSinkConfig.checkClassName("org.apache.kafka.clients.producer.KafkaProducer");
     assertThat(result).isFalse();
-  }
-
-  @Test
-  public void testControlPollIntervalMsDefault() {
-    Map<String, String> props =
-        ImmutableMap.of(
-            "iceberg.catalog.type", "rest",
-            "topics", "source-topic",
-            "iceberg.tables", "db.landing");
-    IcebergSinkConfig config = new IcebergSinkConfig(props);
-    assertThat(config.controlPollIntervalMs()).isEqualTo(100);
-  }
-
-  @Test
-  public void testControlPollIntervalMsCustom() {
-    Map<String, String> props =
-        ImmutableMap.of(
-            "iceberg.catalog.type", "rest",
-            "topics", "source-topic",
-            "iceberg.tables", "db.landing",
-            "iceberg.control.poll.interval-ms", "500");
-    IcebergSinkConfig config = new IcebergSinkConfig(props);
-    assertThat(config.controlPollIntervalMs()).isEqualTo(500);
-  }
-
-  @Test
-  public void testControlPollIntervalMsTooSmall() {
-    Map<String, String> props =
-        ImmutableMap.of(
-            "iceberg.catalog.type", "rest",
-            "topics", "source-topic",
-            "iceberg.tables", "db.landing",
-            "iceberg.control.poll.interval-ms", "0");
-    assertThatThrownBy(() -> new IcebergSinkConfig(props))
-        .isInstanceOf(ConfigException.class)
-        .hasMessageContaining("Value must be at least 10");
   }
 }

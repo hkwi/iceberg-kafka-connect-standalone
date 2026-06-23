@@ -61,23 +61,20 @@ public class IcebergSinkTask extends SinkTask {
   }
 
   private void close() {
-    try {
-      if (committer != null) {
-        committer.close(List.of());
-      }
-    } finally {
+    if (committer != null) {
+      committer.close(List.of());
       committer = null;
+    }
 
-      if (catalog != null) {
-        if (catalog instanceof AutoCloseable) {
-          try {
-            ((AutoCloseable) catalog).close();
-          } catch (Exception e) {
-            LOG.warn("An error occurred closing catalog instance, ignoring...", e);
-          }
+    if (catalog != null) {
+      if (catalog instanceof AutoCloseable) {
+        try {
+          ((AutoCloseable) catalog).close();
+        } catch (Exception e) {
+          LOG.warn("An error occurred closing catalog instance, ignoring...", e);
         }
-        catalog = null;
       }
+      catalog = null;
     }
   }
 

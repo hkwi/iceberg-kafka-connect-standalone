@@ -23,7 +23,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
-import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -55,9 +54,7 @@ import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StringType;
 import org.apache.iceberg.types.Types.StructType;
 import org.apache.iceberg.types.Types.TimeType;
-import org.apache.iceberg.types.Types.TimestampNanoType;
 import org.apache.iceberg.types.Types.TimestampType;
-import org.apache.iceberg.types.Types.UUIDType;
 import org.apache.iceberg.util.Pair;
 import org.apache.iceberg.util.Tasks;
 import org.apache.kafka.connect.data.Date;
@@ -73,18 +70,6 @@ class SchemaUtils {
   private static final Logger LOG = LoggerFactory.getLogger(SchemaUtils.class);
 
   private static final Pattern TRANSFORM_REGEX = Pattern.compile("(\\w+)\\((.+)\\)");
-
-  // Connect schema names assigned by the Confluent AvroConverter to sub-millisecond and zone-less
-  // Avro temporal logical types. These arrive as raw int64 (no Connect logical type), with the unit
-  // and zone semantics encoded only in the schema name. timestamp-* are UTC instants (map to
-  // with-zone); local-timestamp-* are zone-less (map to without-zone). Kept in sync with
-  // schema-registry's AvroData.
-  static final String AVRO_TIMESTAMP_MICROS = "timestamp-micros";
-  static final String AVRO_TIMESTAMP_NANOS = "timestamp-nanos";
-  static final String AVRO_LOCAL_TIMESTAMP_MILLIS = "local-timestamp-millis";
-  static final String AVRO_LOCAL_TIMESTAMP_MICROS = "local-timestamp-micros";
-  static final String AVRO_LOCAL_TIMESTAMP_NANOS = "local-timestamp-nanos";
-  static final String AVRO_TIME_MICROS = "time-micros";
 
   static PrimitiveType needsDataTypeUpdate(Type currentIcebergType, Schema valueSchema) {
     if (currentIcebergType.typeId() == TypeID.FLOAT && valueSchema.type() == Schema.Type.FLOAT64) {
@@ -250,8 +235,6 @@ class SchemaUtils {
           if (Decimal.LOGICAL_NAME.equals(valueSchema.name())) {
             int scale = Integer.parseInt(valueSchema.parameters().get(Decimal.SCALE_FIELD));
             return DecimalType.of(38, scale);
-          } else if ("uuid".equals(valueSchema.name())) {
-            return UUIDType.get();
           }
           return BinaryType.get();
         case INT8:
@@ -265,18 +248,8 @@ class SchemaUtils {
           }
           return IntegerType.get();
         case INT64:
-          String int64Name = valueSchema.name();
-          if (Timestamp.LOGICAL_NAME.equals(int64Name) || AVRO_TIMESTAMP_MICROS.equals(int64Name)) {
+          if (Timestamp.LOGICAL_NAME.equals(valueSchema.name())) {
             return TimestampType.withZone();
-          } else if (AVRO_TIMESTAMP_NANOS.equals(int64Name)) {
-            return TimestampNanoType.withZone();
-          } else if (AVRO_LOCAL_TIMESTAMP_MILLIS.equals(int64Name)
-              || AVRO_LOCAL_TIMESTAMP_MICROS.equals(int64Name)) {
-            return TimestampType.withoutZone();
-          } else if (AVRO_LOCAL_TIMESTAMP_NANOS.equals(int64Name)) {
-            return TimestampNanoType.withoutZone();
-          } else if (AVRO_TIME_MICROS.equals(int64Name)) {
-            return TimeType.get();
           }
           return LongType.get();
         case FLOAT32:
@@ -313,10 +286,6 @@ class SchemaUtils {
                   .collect(Collectors.toList());
           return StructType.of(structFields);
         case STRING:
-          if ("uuid".equals(valueSchema.name())) {
-            return UUIDType.get();
-          }
-          return StringType.get();
         default:
           return StringType.get();
       }
@@ -332,15 +301,7 @@ class SchemaUtils {
         return BooleanType.get();
       } else if (value instanceof BigDecimal) {
         BigDecimal bigDecimal = (BigDecimal) value;
-        int scale = bigDecimal.scale();
-        int precision = bigDecimal.precision();
-        // BigDecimal may use a negative scale (e.g. "1E+2" has scale -2)
-        if (scale < 0) {
-          precision -= scale;
-          scale = 0;
-        }
-        // a value < 1 may have precision < scale (e.g. "0.001"); widen precision to the scale
-        return DecimalType.of(Math.max(precision, scale), scale);
+        return DecimalType.of(bigDecimal.precision(), bigDecimal.scale());
       } else if (value instanceof Integer || value instanceof Long) {
         return LongType.get();
       } else if (value instanceof Float || value instanceof Double) {
@@ -349,9 +310,7 @@ class SchemaUtils {
         return DateType.get();
       } else if (value instanceof LocalTime) {
         return TimeType.get();
-      } else if (value instanceof java.util.Date
-          || value instanceof OffsetDateTime
-          || value instanceof ZonedDateTime) {
+      } else if (value instanceof java.util.Date || value instanceof OffsetDateTime) {
         return TimestampType.withZone();
       } else if (value instanceof LocalDateTime) {
         return TimestampType.withoutZone();

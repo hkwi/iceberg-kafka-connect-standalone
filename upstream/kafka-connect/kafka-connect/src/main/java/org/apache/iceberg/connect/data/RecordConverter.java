@@ -68,7 +68,6 @@ import org.apache.iceberg.types.Types.ListType;
 import org.apache.iceberg.types.Types.MapType;
 import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StructType;
-import org.apache.iceberg.types.Types.TimestampNanoType;
 import org.apache.iceberg.types.Types.TimestampType;
 import org.apache.iceberg.util.ByteBuffers;
 import org.apache.iceberg.util.DateTimeUtil;
@@ -101,19 +100,11 @@ class RecordConverter {
   private final NameMapping nameMapping;
   private final IcebergSinkConfig config;
   private final Map<Integer, Map<String, NestedField>> structNameMap = Maps.newHashMap();
-  // Parquet stores UUIDs as a 16-byte fixed; other formats keep the UUID logical type. The write
-  // file format is fixed for the converter's lifetime, so resolve this once instead of per value.
-  private final boolean writeUuidAsBytes;
 
   RecordConverter(Table table, IcebergSinkConfig config) {
     this.tableSchema = table.schema();
     this.nameMapping = createNameMapping(table);
     this.config = config;
-    this.writeUuidAsBytes =
-        FileFormat.PARQUET
-            .name()
-            .toLowerCase(Locale.ROOT)
-            .equals(config.writeProps().get(TableProperties.DEFAULT_FILE_FORMAT));
   }
 
   Record convert(Object data) {
@@ -134,20 +125,6 @@ class RecordConverter {
 
   private Object convertValue(
       Object value, Type type, int fieldId, SchemaUpdate.Consumer schemaUpdateConsumer) {
-    return convertValue(value, type, fieldId, schemaUpdateConsumer, null);
-  }
-
-  /**
-   * @param sourceSchema the Connect schema of the source value, used to recover the time unit
-   *     (millis/micros/nanos) of numeric temporal values; may be null when there is no record
-   *     schema, in which case numeric temporal values are interpreted as milliseconds.
-   */
-  private Object convertValue(
-      Object value,
-      Type type,
-      int fieldId,
-      SchemaUpdate.Consumer schemaUpdateConsumer,
-      org.apache.kafka.connect.data.Schema sourceSchema) {
     if (value == null) {
       return null;
     }
@@ -155,9 +132,9 @@ class RecordConverter {
       case STRUCT:
         return convertStructValue(value, type.asStructType(), fieldId, schemaUpdateConsumer);
       case LIST:
-        return convertListValue(value, type.asListType(), schemaUpdateConsumer, sourceSchema);
+        return convertListValue(value, type.asListType(), schemaUpdateConsumer);
       case MAP:
-        return convertMapValue(value, type.asMapType(), schemaUpdateConsumer, sourceSchema);
+        return convertMapValue(value, type.asMapType(), schemaUpdateConsumer);
       case INTEGER:
         return convertInt(value);
       case LONG:
@@ -181,13 +158,9 @@ class RecordConverter {
       case DATE:
         return convertDateValue(value);
       case TIME:
-        return convertTimeValue(value, sourceSchema);
+        return convertTimeValue(value);
       case TIMESTAMP:
-        return convertTimestampValue(
-            value, ((TimestampType) type).shouldAdjustToUTC(), sourceSchema);
-      case TIMESTAMP_NANO:
-        return convertTimestampValue(
-            value, ((TimestampNanoType) type).shouldAdjustToUTC(), sourceSchema);
+        return convertTimestampValue(value, (TimestampType) type);
       case VARIANT:
         return convertVariantValue(value);
     }
@@ -301,8 +274,7 @@ class RecordConverter {
                           recordFieldValue,
                           tableField.type(),
                           tableField.fieldId(),
-                          schemaUpdateConsumer,
-                          recordField.schema()));
+                          schemaUpdateConsumer));
                 }
               }
             });
@@ -397,29 +369,22 @@ class RecordConverter {
           : schema.field(fieldName);
     }
 
-    Map<String, NestedField> nameMap =
-        structNameMap.computeIfAbsent(structFieldId, notUsed -> createStructNameMap(schema));
-    String lookupKey =
-        config.schemaCaseInsensitive() ? fieldName.toLowerCase(Locale.ROOT) : fieldName;
-    return nameMap.get(lookupKey);
+    return structNameMap
+        .computeIfAbsent(structFieldId, notUsed -> createStructNameMap(schema))
+        .get(fieldName);
   }
 
   private Map<String, NestedField> createStructNameMap(StructType schema) {
     Map<String, NestedField> map = Maps.newHashMap();
-    boolean caseInsensitive = config.schemaCaseInsensitive();
     schema
         .fields()
         .forEach(
             col -> {
               MappedField mappedField = nameMapping.find(col.fieldId());
               if (mappedField != null && !mappedField.names().isEmpty()) {
-                mappedField
-                    .names()
-                    .forEach(
-                        name ->
-                            map.put(caseInsensitive ? name.toLowerCase(Locale.ROOT) : name, col));
+                mappedField.names().forEach(name -> map.put(name, col));
               } else {
-                map.put(caseInsensitive ? col.name().toLowerCase(Locale.ROOT) : col.name(), col);
+                map.put(col.name(), col);
               }
             });
     return map;
@@ -427,43 +392,20 @@ class RecordConverter {
 
   protected List<Object> convertListValue(
       Object value, ListType type, SchemaUpdate.Consumer schemaUpdateConsumer) {
-    return convertListValue(value, type, schemaUpdateConsumer, null);
-  }
-
-  private List<Object> convertListValue(
-      Object value,
-      ListType type,
-      SchemaUpdate.Consumer schemaUpdateConsumer,
-      org.apache.kafka.connect.data.Schema sourceSchema) {
     Preconditions.checkArgument(value instanceof List);
-    org.apache.kafka.connect.data.Schema elementSchema =
-        sourceSchema != null ? sourceSchema.valueSchema() : null;
     List<?> list = (List<?>) value;
     int elementFieldId = type.fields().get(0).fieldId();
     Type elementType = type.elementType();
     List<Object> result = Lists.newArrayListWithCapacity(list.size());
     for (Object element : list) {
-      result.add(
-          convertValue(element, elementType, elementFieldId, schemaUpdateConsumer, elementSchema));
+      result.add(convertValue(element, elementType, elementFieldId, schemaUpdateConsumer));
     }
     return result;
   }
 
   protected Map<Object, Object> convertMapValue(
       Object value, MapType type, SchemaUpdate.Consumer schemaUpdateConsumer) {
-    return convertMapValue(value, type, schemaUpdateConsumer, null);
-  }
-
-  private Map<Object, Object> convertMapValue(
-      Object value,
-      MapType type,
-      SchemaUpdate.Consumer schemaUpdateConsumer,
-      org.apache.kafka.connect.data.Schema sourceSchema) {
     Preconditions.checkArgument(value instanceof Map);
-    org.apache.kafka.connect.data.Schema keySchema =
-        sourceSchema != null ? sourceSchema.keySchema() : null;
-    org.apache.kafka.connect.data.Schema valueSchema =
-        sourceSchema != null ? sourceSchema.valueSchema() : null;
     Map<?, ?> map = (Map<?, ?>) value;
     int keyFieldId = type.fields().get(0).fieldId();
     int valueFieldId = type.fields().get(1).fieldId();
@@ -473,8 +415,8 @@ class RecordConverter {
     map.forEach(
         (k, v) ->
             result.put(
-                convertValue(k, keyType, keyFieldId, schemaUpdateConsumer, keySchema),
-                convertValue(v, valueType, valueFieldId, schemaUpdateConsumer, valueSchema)));
+                convertValue(k, keyType, keyFieldId, schemaUpdateConsumer),
+                convertValue(v, valueType, valueFieldId, schemaUpdateConsumer)));
     return result;
   }
 
@@ -492,8 +434,6 @@ class RecordConverter {
       return ((Number) value).longValue();
     } else if (value instanceof String) {
       return Long.parseLong((String) value);
-    } else if (value instanceof Date) {
-      return ((Date) value).getTime();
     }
     throw new IllegalArgumentException("Cannot convert to long: " + value.getClass().getName());
   }
@@ -575,7 +515,10 @@ class RecordConverter {
       throw new IllegalArgumentException("Cannot convert to UUID: " + value.getClass().getName());
     }
 
-    if (writeUuidAsBytes) {
+    if (FileFormat.PARQUET
+        .name()
+        .toLowerCase(Locale.ROOT)
+        .equals(config.writeProps().get(TableProperties.DEFAULT_FILE_FORMAT))) {
       return UUIDUtil.convert(uuid);
     } else {
       return uuid;
@@ -609,17 +552,11 @@ class RecordConverter {
     throw new ConnectException("Cannot convert date: " + value);
   }
 
-  protected LocalTime convertTimeValue(Object value) {
-    return convertTimeValue(value, null);
-  }
-
   @SuppressWarnings("JavaUtilDate")
-  protected LocalTime convertTimeValue(
-      Object value, org.apache.kafka.connect.data.Schema sourceSchema) {
+  protected LocalTime convertTimeValue(Object value) {
     if (value instanceof Number) {
-      long raw = ((Number) value).longValue();
-      long micros = avroTimeUnit(sourceSchema) == AvroTimeUnit.MICROS ? raw : raw * 1000;
-      return DateTimeUtil.timeFromMicros(micros);
+      long millis = ((Number) value).longValue();
+      return DateTimeUtil.timeFromMicros(millis * 1000);
     } else if (value instanceof String) {
       return LocalTime.parse((String) value);
     } else if (value instanceof LocalTime) {
@@ -632,45 +569,10 @@ class RecordConverter {
   }
 
   protected Temporal convertTimestampValue(Object value, TimestampType type) {
-    return convertTimestampValue(value, type.shouldAdjustToUTC(), null);
-  }
-
-  private Temporal convertTimestampValue(
-      Object value, boolean adjustToUTC, org.apache.kafka.connect.data.Schema sourceSchema) {
-    if (adjustToUTC) {
-      return convertOffsetDateTime(value, sourceSchema);
+    if (type.shouldAdjustToUTC()) {
+      return convertOffsetDateTime(value);
     }
-    return convertLocalDateTime(value, sourceSchema);
-  }
-
-  private enum AvroTimeUnit {
-    MILLIS,
-    MICROS,
-    NANOS
-  }
-
-  /**
-   * Recovers the time unit of a numeric temporal value from its Connect schema name. The Confluent
-   * AvroConverter passes sub-millisecond and zone-less Avro temporal types through as raw int64
-   * with the unit encoded only in the schema name; without the name (e.g. schemaless records) we
-   * keep the historical assumption of milliseconds.
-   */
-  private static AvroTimeUnit avroTimeUnit(org.apache.kafka.connect.data.Schema sourceSchema) {
-    String name = sourceSchema != null ? sourceSchema.name() : null;
-    if (name == null) {
-      return AvroTimeUnit.MILLIS;
-    }
-    switch (name) {
-      case SchemaUtils.AVRO_TIMESTAMP_MICROS:
-      case SchemaUtils.AVRO_LOCAL_TIMESTAMP_MICROS:
-      case SchemaUtils.AVRO_TIME_MICROS:
-        return AvroTimeUnit.MICROS;
-      case SchemaUtils.AVRO_TIMESTAMP_NANOS:
-      case SchemaUtils.AVRO_LOCAL_TIMESTAMP_NANOS:
-        return AvroTimeUnit.NANOS;
-      default:
-        return AvroTimeUnit.MILLIS;
-    }
+    return convertLocalDateTime(value);
   }
 
   protected Variant convertVariantValue(Object value) {
@@ -902,18 +804,10 @@ class RecordConverter {
   }
 
   @SuppressWarnings("JavaUtilDate")
-  private OffsetDateTime convertOffsetDateTime(
-      Object value, org.apache.kafka.connect.data.Schema sourceSchema) {
+  private OffsetDateTime convertOffsetDateTime(Object value) {
     if (value instanceof Number) {
-      long raw = ((Number) value).longValue();
-      switch (avroTimeUnit(sourceSchema)) {
-        case NANOS:
-          return DateTimeUtil.timestamptzFromNanos(raw);
-        case MICROS:
-          return DateTimeUtil.timestamptzFromMicros(raw);
-        default:
-          return DateTimeUtil.timestamptzFromMicros(raw * 1000);
-      }
+      long millis = ((Number) value).longValue();
+      return DateTimeUtil.timestamptzFromMicros(millis * 1000);
     } else if (value instanceof String) {
       return parseOffsetDateTime((String) value);
     } else if (value instanceof OffsetDateTime) {
@@ -938,18 +832,10 @@ class RecordConverter {
   }
 
   @SuppressWarnings("JavaUtilDate")
-  private LocalDateTime convertLocalDateTime(
-      Object value, org.apache.kafka.connect.data.Schema sourceSchema) {
+  private LocalDateTime convertLocalDateTime(Object value) {
     if (value instanceof Number) {
-      long raw = ((Number) value).longValue();
-      switch (avroTimeUnit(sourceSchema)) {
-        case NANOS:
-          return DateTimeUtil.timestampFromNanos(raw);
-        case MICROS:
-          return DateTimeUtil.timestampFromMicros(raw);
-        default:
-          return DateTimeUtil.timestampFromMicros(raw * 1000);
-      }
+      long millis = ((Number) value).longValue();
+      return DateTimeUtil.timestampFromMicros(millis * 1000);
     } else if (value instanceof String) {
       return parseLocalDateTime((String) value);
     } else if (value instanceof LocalDateTime) {

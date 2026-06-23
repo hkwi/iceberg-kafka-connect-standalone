@@ -20,10 +20,8 @@ package org.apache.iceberg.connect.data;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
@@ -33,10 +31,10 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
+import org.apache.iceberg.exceptions.ForbiddenException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.types.Type;
-import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StructType;
 import org.apache.iceberg.util.Tasks;
 import org.apache.kafka.connect.errors.DataException;
@@ -50,16 +48,10 @@ class IcebergWriterFactory {
 
   private final Catalog catalog;
   private final IcebergSinkConfig config;
-  private final ConnectorMetrics metrics;
 
   IcebergWriterFactory(Catalog catalog, IcebergSinkConfig config) {
-    this(catalog, config, ConnectorMetrics.NOOP);
-  }
-
-  IcebergWriterFactory(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
     this.catalog = catalog;
     this.config = config;
-    this.metrics = metrics;
   }
 
   RecordWriter createWriter(String tableName, SinkRecord sample, boolean ignoreMissingTable) {
@@ -85,7 +77,7 @@ class IcebergWriterFactory {
     }
     TableReference tableReference = TableReference.of(catalog.name(), identifier, tableUuid);
 
-    return new IcebergWriter(table, tableReference, config, metrics);
+    return new IcebergWriter(table, tableReference, config);
   }
 
   @VisibleForTesting
@@ -101,53 +93,7 @@ class IcebergWriterFactory {
       structType = SchemaUtils.toIcebergType(sample.valueSchema(), config).asStructType();
     }
 
-    List<String> idColumns = config.tableConfig(tableName).idColumns();
-
-    if (!idColumns.isEmpty() && config.schemaForceOptional()) {
-      throw new DataException(
-          String.format(
-              "iceberg.tables.schema-force-optional is enabled for table %s but id-columns are configured. "
-                  + "schema-force-optional marks every field optional, which is incompatible with identifier fields that must be required. "
-                  + "Disable schema-force-optional or remove the id-columns configuration.",
-              tableName));
-    }
-
-    Set<Integer> identifierFieldIds =
-        idColumns.stream()
-            .map(
-                name -> {
-                  if (name.contains(".")) {
-                    throw new DataException(
-                        String.format(
-                            "ID column '%s' for table %s must be a top-level column name, not a dotted path. "
-                                + "Nested identifier fields are not supported by the connector.",
-                            name, tableName));
-                  }
-                  NestedField field = structType.field(name);
-                  if (field == null) {
-                    throw new DataException(
-                        String.format(
-                            "ID column '%s' not found in schema for table %s. Available columns: %s",
-                            name,
-                            tableName,
-                            structType.fields().stream()
-                                .map(NestedField::name)
-                                .collect(Collectors.toList())));
-                  }
-                  return field.fieldId();
-                })
-            .collect(Collectors.toSet());
-
-    org.apache.iceberg.Schema schema;
-    try {
-      schema = new org.apache.iceberg.Schema(structType.fields(), identifierFieldIds);
-    } catch (IllegalArgumentException e) {
-      throw new DataException(
-          String.format(
-              "Invalid identifier column configuration for table %s: %s",
-              tableName, e.getMessage()),
-          e);
-    }
+    org.apache.iceberg.Schema schema = new org.apache.iceberg.Schema(structType.fields());
     TableIdentifier identifier = TableIdentifier.parse(tableName);
 
     createNamespaceIfNotExist(catalog, identifier.namespace());
@@ -179,7 +125,6 @@ class IcebergWriterFactory {
                 result.set(catalog.loadTable(identifier));
               }
             });
-    metrics.tableAutoCreated(tableName);
     return result.get();
   }
 
@@ -189,16 +134,14 @@ class IcebergWriterFactory {
       return;
     }
 
-    SupportsNamespaces nsCatalog = (SupportsNamespaces) catalog;
     String[] levels = identifierNamespace.levels();
     for (int index = 0; index < levels.length; index++) {
       Namespace namespace = Namespace.of(Arrays.copyOfRange(levels, 0, index + 1));
-      if (!nsCatalog.namespaceExists(namespace)) {
-        try {
-          nsCatalog.createNamespace(namespace);
-        } catch (AlreadyExistsException ex) {
-          LOG.warn("Namespace {} was created concurrently", namespace, ex);
-        }
+      try {
+        ((SupportsNamespaces) catalog).createNamespace(namespace);
+      } catch (AlreadyExistsException | ForbiddenException ex) {
+        // Ignoring the error as forcefully creating the namespace even if it exists
+        // to avoid double namespaceExists() check.
       }
     }
   }

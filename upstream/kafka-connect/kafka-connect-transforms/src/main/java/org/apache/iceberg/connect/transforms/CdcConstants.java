@@ -27,7 +27,6 @@ public interface CdcConstants {
   String COL_CDC = "_cdc";
   String COL_OP = "op";
   String COL_TS = "ts";
-  String COL_SOURCE_TS = "source_ts";
   String COL_OFFSET = "offset";
   String COL_SOURCE = "source";
   String COL_TARGET = "target";

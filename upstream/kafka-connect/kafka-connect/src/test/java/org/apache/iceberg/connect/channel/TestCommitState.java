@@ -23,16 +23,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.events.DataComplete;
-import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.Payload;
-import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
@@ -114,37 +109,6 @@ public class TestCommitState {
     // Only the current commit's payload counts toward readiness.
     assertThat(commitState.isCommitReady(1)).isTrue();
     assertThat(commitState.isCommitReady(2)).isFalse();
-  }
-
-
-  @Test
-  public void testTableCommitGroupsSeparatesCommitIdsAndOrdersCurrentLast() {
-    CommitState commitState = new CommitState(mock(IcebergSinkConfig.class));
-    commitState.startNewCommit();
-
-    TableReference tableReference = TableReference.of("catalog", TableIdentifier.of("db", "tbl"), null);
-    UUID currentCommitId = commitState.currentCommitId();
-    UUID staleCommitId = UUID.randomUUID();
-
-    DataWritten currentPayload = mock(DataWritten.class);
-    when(currentPayload.tableReference()).thenReturn(tableReference);
-    when(currentPayload.commitId()).thenReturn(currentCommitId);
-
-    DataWritten stalePayload = mock(DataWritten.class);
-    when(stalePayload.tableReference()).thenReturn(tableReference);
-    when(stalePayload.commitId()).thenReturn(staleCommitId);
-
-    commitState.addResponse(wrapInEnvelope(currentPayload));
-    commitState.addResponse(wrapInEnvelope(stalePayload));
-
-    Map<TableReference, List<CommitState.CommitGroup>> groups = commitState.tableCommitGroups();
-
-    assertThat(groups).containsOnlyKeys(tableReference);
-    assertThat(groups.get(tableReference)).hasSize(2);
-    assertThat(groups.get(tableReference).get(0).commitId()).isEqualTo(staleCommitId);
-    assertThat(groups.get(tableReference).get(0).currentCommit()).isFalse();
-    assertThat(groups.get(tableReference).get(1).commitId()).isEqualTo(currentCommitId);
-    assertThat(groups.get(tableReference).get(1).currentCommit()).isTrue();
   }
 
   @Test

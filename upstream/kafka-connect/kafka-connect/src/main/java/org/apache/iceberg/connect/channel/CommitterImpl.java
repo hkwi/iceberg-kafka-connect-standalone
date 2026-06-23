@@ -24,14 +24,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.data.ConnectorMetrics;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -47,7 +45,6 @@ public class CommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
-  private ConnectorMetrics metrics = ConnectorMetrics.NOOP;
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
   private String taskId;
@@ -61,7 +58,6 @@ public class CommitterImpl implements Committer {
       this.config = icebergSinkConfig;
       this.context = sinkTaskContext;
       this.clientFactory = new KafkaClientFactory(config.kafkaProps());
-      this.metrics = ConnectorMetrics.create(sinkTaskContext);
       this.taskId = config.connectorName() + "-" + config.taskId();
     }
   }
@@ -163,78 +159,31 @@ public class CommitterImpl implements Committer {
 
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
-    RuntimeException failure = null;
-
     // Always try to stop the worker to avoid duplicates.
-    try {
-      stopWorker();
-    } catch (RuntimeException e) {
-      failure = Channel.appendFailure(failure, e);
-      LOG.warn("Committer {} failed to stop worker, continuing cleanup", taskId, e);
-    }
+    stopWorker();
 
     // Defensive: close called without prior initialization (should not happen).
     if (!isInitialized.get()) {
       LOG.warn("Close unexpectedly called on committer {} without partition assignment", taskId);
-      if (failure != null) {
-        throw failure;
-      }
       return;
     }
 
-    // Empty partitions: task was stopped explicitly. Stop coordinator if running.
+    // Empty partitions → task was stopped explicitly. Stop coordinator if running.
     if (closedPartitions.isEmpty()) {
       LOG.info("Committer {} stopped. Closing coordinator.", taskId);
-      try {
-        stopCoordinator();
-      } catch (RuntimeException e) {
-        failure = Channel.appendFailure(failure, e);
-        LOG.warn("Committer {} failed to stop coordinator", taskId, e);
-      } finally {
-        metrics.close();
-        metrics = ConnectorMetrics.NOOP;
-      }
-      if (failure != null) {
-        throw failure;
-      }
+      stopCoordinator();
       return;
     }
 
     // Normal close: if leader partition is lost, stop coordinator.
-    boolean shouldStopCoordinator = false;
-    try {
-      shouldStopCoordinator = hasLeaderPartition(closedPartitions);
-    } catch (RuntimeException e) {
-      failure = Channel.appendFailure(failure, e);
-      shouldStopCoordinator = true;
-      LOG.warn(
-          "Committer {} could not determine whether leader partition was lost, stopping coordinator",
-          taskId,
-          e);
-    }
-
-    if (shouldStopCoordinator) {
+    if (hasLeaderPartition(closedPartitions)) {
       LOG.info("Committer {} lost leader partition. Stopping coordinator.", taskId);
-      try {
-        stopCoordinator();
-      } catch (RuntimeException e) {
-        failure = Channel.appendFailure(failure, e);
-        LOG.warn("Committer {} failed to stop coordinator", taskId, e);
-      }
+      stopCoordinator();
     }
 
     // Reset offsets to last committed to avoid data loss.
     LOG.info("Seeking to last committed offsets for worker {}.", taskId);
-    try {
-      KafkaUtils.seekToLastCommittedOffsets(context);
-    } catch (RuntimeException e) {
-      failure = Channel.appendFailure(failure, e);
-      LOG.warn("Committer {} failed to seek to last committed offsets", taskId, e);
-    }
-
-    if (failure != null) {
-      throw failure;
-    }
+    KafkaUtils.seekToLastCommittedOffsets(context);
   }
 
   @Override
@@ -252,28 +201,14 @@ public class CommitterImpl implements Committer {
           String.format("Coordinator unexpectedly terminated on committer %s", taskId));
     }
     if (worker != null) {
-      try {
-        worker.process();
-      } catch (RetriableException retriableException) {
-        LOG.info(
-            "Committer {} got retriable exception while processing control events. This can happen during re-balance.",
-            taskId,
-            retriableException.getCause());
-        stopWorker();
-        throw retriableException;
-      } catch (RuntimeException e) {
-        LOG.error("Committer {} worker failed while processing control events", taskId, e);
-        stopWorker();
-        throw e;
-      }
+      worker.process();
     }
   }
 
   private void startWorker() {
     if (null == this.worker) {
       LOG.info("Starting commit worker {}", taskId);
-      SinkWriter sinkWriter = new SinkWriter(catalog, config, metrics);
-      sinkWriter.setReporter(context.errantRecordReporter());
+      SinkWriter sinkWriter = new SinkWriter(catalog, config);
       worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
     }
@@ -283,9 +218,8 @@ public class CommitterImpl implements Committer {
     if (null == this.coordinatorThread) {
       LOG.info("Task {} elected leader, starting commit coordinator", taskId);
       Coordinator coordinator =
-          new Coordinator(
-              catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context, metrics);
-      coordinatorThread = new CoordinatorThread(coordinator, config.connectorName());
+          new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
+      coordinatorThread = new CoordinatorThread(coordinator);
       coordinatorThread.start();
     }
   }

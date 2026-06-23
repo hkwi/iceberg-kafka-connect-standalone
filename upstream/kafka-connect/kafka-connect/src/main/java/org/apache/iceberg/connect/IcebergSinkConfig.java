@@ -28,9 +28,6 @@ import java.util.Properties;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.iceberg.IcebergBuild;
-import org.apache.iceberg.common.DynClasses;
-import org.apache.iceberg.connect.data.ErrorTolerance;
-import org.apache.iceberg.connect.data.RecordRouter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.base.Splitter;
@@ -69,7 +66,6 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   private static final String CATALOG_NAME_PROP = "iceberg.catalog";
   private static final String TABLES_PROP = "iceberg.tables";
-  private static final String TABLES_ROUTE_WITH_PROP = "iceberg.tables.route-with";
   private static final String TABLES_DYNAMIC_PROP = "iceberg.tables.dynamic-enabled";
   private static final String TABLES_ROUTE_FIELD_PROP = "iceberg.tables.route-field";
   private static final String TABLES_DEFAULT_COMMIT_BRANCH = "iceberg.tables.default-commit-branch";
@@ -83,8 +79,6 @@ public class IcebergSinkConfig extends AbstractConfig {
       "iceberg.tables.schema-force-optional";
   private static final String TABLES_SCHEMA_CASE_INSENSITIVE_PROP =
       "iceberg.tables.schema-case-insensitive";
-  private static final String ERROR_TOLERANCE = "errors.tolerance";
-  private static final String ERROR_LOG_INCLUDE_MESSAGES = "errors.log.include.messages";
   private static final String CONTROL_TOPIC_PROP = "iceberg.control.topic";
   private static final String CONTROL_GROUP_ID_PREFIX_PROP = "iceberg.control.group-id-prefix";
   private static final String COMMIT_INTERVAL_MS_PROP = "iceberg.control.commit.interval-ms";
@@ -92,21 +86,14 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String COMMIT_TIMEOUT_MS_PROP = "iceberg.control.commit.timeout-ms";
   private static final int COMMIT_TIMEOUT_MS_DEFAULT = 30_000;
   private static final String COMMIT_THREADS_PROP = "iceberg.control.commit.threads";
-  @Deprecated private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
-  private static final String CONSUMER_OVERRIDE_GROUP_ID_PROP = "consumer.override.group.id";
-  private static final String WORKER_CONSUMER_GROUP_ID_PROP = "consumer.group.id";
+  private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
   private static final String TRANSACTIONAL_PREFIX_PROP =
       "iceberg.coordinator.transactional.prefix";
-  private static final String CONTROL_POLL_INTERVAL_MS_PROP = "iceberg.control.poll.interval-ms";
-  private static final int CONTROL_POLL_INTERVAL_MS_DEFAULT = 100;
   private static final String HADOOP_CONF_DIR_PROP = "iceberg.hadoop-conf-dir";
 
   private static final String NAME_PROP = "name";
   private static final String TASK_ID = "task.id";
   private static final String BOOTSTRAP_SERVERS_PROP = "bootstrap.servers";
-
-  private static final String DEFAULT_ERROR_TOLERANCE = ErrorTolerance.NONE.toString();
-  private static final String DEFAULT_ERROR_LOG_INCLUDE_MESSAGES = "false";
 
   private static final String DEFAULT_CATALOG_NAME = "iceberg";
   private static final String DEFAULT_CONTROL_TOPIC = "control-iceberg";
@@ -117,16 +104,6 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   private static final String COORDINATOR_EXECUTOR_KEEP_ALIVE_TIMEOUT_MS =
       "iceberg.coordinator-executor-keep-alive-timeout-ms";
-  private static final String COMMIT_MAX_CONSECUTIVE_FAILURES_PROP =
-      "iceberg.control.commit.max-consecutive-failures";
-  private static final int COMMIT_MAX_CONSECUTIVE_FAILURES_DEFAULT = 1;
-  private static final String TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP =
-      "iceberg.kafka.transactional-commit-retriable-exceptions";
-  private static final List<String> DEFAULT_TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS =
-      ImmutableList.of(
-          "org.apache.kafka.clients.consumer.CommitFailedException",
-          "org.apache.kafka.common.errors.InvalidProducerEpochException",
-          "org.apache.kafka.common.errors.ProducerFencedException");
 
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
@@ -144,12 +121,6 @@ public class IcebergSinkConfig extends AbstractConfig {
         null,
         Importance.HIGH,
         "Comma-delimited list of destination tables");
-    configDef.define(
-        TABLES_ROUTE_WITH_PROP,
-        ConfigDef.Type.CLASS,
-        null,
-        Importance.MEDIUM,
-        "Routing mechanism for the tables: FIELD_VALUE, FIELD_REGEX, TOPIC_NAME, TOPIC_REGEX");
     configDef.define(
         TABLES_DYNAMIC_PROP,
         ConfigDef.Type.BOOLEAN,
@@ -211,18 +182,6 @@ public class IcebergSinkConfig extends AbstractConfig {
         Importance.MEDIUM,
         "Iceberg catalog name");
     configDef.define(
-        ERROR_TOLERANCE,
-        ConfigDef.Type.STRING,
-        DEFAULT_ERROR_TOLERANCE,
-        Importance.MEDIUM,
-        "Behavior for tolerating errors during connector operation. 'none' is the default value and signals that any error will result in an immediate connector task failure; 'all' changes the behavior to skip over problematic records.");
-    configDef.define(
-        ERROR_LOG_INCLUDE_MESSAGES,
-        ConfigDef.Type.BOOLEAN,
-        DEFAULT_ERROR_LOG_INCLUDE_MESSAGES,
-        Importance.MEDIUM,
-        "If true, write each error and the details of the failed operation and problematic record to the Connect application log. This is 'false' by default, so that only errors that are not tolerated are reported.");
-    configDef.define(
         CONTROL_TOPIC_PROP,
         ConfigDef.Type.STRING,
         DEFAULT_CONTROL_TOPIC,
@@ -239,8 +198,7 @@ public class IcebergSinkConfig extends AbstractConfig {
         ConfigDef.Type.STRING,
         null,
         Importance.LOW,
-        "Deprecated: ignored by the connector. The source consumer group is derived from "
-            + "consumer.override.group.id, worker consumer config, or the connector name.");
+        "Name of the Connect consumer group, should not be set under normal conditions");
     configDef.define(
         COMMIT_INTERVAL_MS_PROP,
         ConfigDef.Type.INT,
@@ -266,13 +224,6 @@ public class IcebergSinkConfig extends AbstractConfig {
         Importance.LOW,
         "Optional prefix of the transactional id for the coordinator");
     configDef.define(
-        CONTROL_POLL_INTERVAL_MS_PROP,
-        ConfigDef.Type.INT,
-        CONTROL_POLL_INTERVAL_MS_DEFAULT,
-        ConfigDef.Range.atLeast(10),
-        Importance.LOW,
-        "Worker control topic polling interval in milliseconds for async background processing");
-    configDef.define(
         HADOOP_CONF_DIR_PROP,
         ConfigDef.Type.STRING,
         null,
@@ -284,18 +235,6 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
-    configDef.define(
-        COMMIT_MAX_CONSECUTIVE_FAILURES_PROP,
-        ConfigDef.Type.INT,
-        COMMIT_MAX_CONSECUTIVE_FAILURES_DEFAULT,
-        Importance.MEDIUM,
-        "Maximum number of consecutive commit failures before the coordinator terminates");
-    configDef.define(
-        TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP,
-        ConfigDef.Type.LIST,
-        DEFAULT_TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS,
-        Importance.LOW,
-        "Comma-separated list of fully qualified Throwable class names raised by the producer transaction commit that should be translated to RetriableException");
     return configDef;
   }
 
@@ -307,7 +246,6 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newConcurrentMap();
   private final JsonConverter jsonConverter;
-  private volatile List<Class<? extends Throwable>> transactionalCommitRetriableExceptions;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, originalProps);
@@ -344,10 +282,6 @@ public class IcebergSinkConfig extends AbstractConfig {
     } else {
       throw new ConfigException("Must specify table name(s)");
     }
-    checkState(
-        !(schemaForceOptional() && tablesDefaultIdColumns() != null),
-        "iceberg.tables.schema-force-optional and iceberg.tables.default-id-columns are incompatible: "
-            + "schema-force-optional marks every field optional, but identifier fields must be required");
   }
 
   private void checkState(boolean condition, String msg) {
@@ -398,12 +332,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
   public boolean dynamicTablesEnabled() {
-    return getBoolean(TABLES_DYNAMIC_PROP)
-        || RecordRouter.DynamicRecordRouter.class.equals(tablesRouteWith());
-  }
-
-  public <T extends RecordRouter> Class<T> tablesRouteWith() {
-    return (Class<T>) getClass(TABLES_ROUTE_WITH_PROP);
+    return getBoolean(TABLES_DYNAMIC_PROP);
   }
 
   public String tablesRouteField() {
@@ -424,10 +353,6 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public long keepAliveTimeoutInMs() {
     return getLong(COORDINATOR_EXECUTOR_KEEP_ALIVE_TIMEOUT_MS);
-  }
-
-  public int commitMaxConsecutiveFailures() {
-    return getInt(COMMIT_MAX_CONSECUTIVE_FAILURES_PROP);
   }
 
   public TableSinkConfig tableConfig(String tableName) {
@@ -472,22 +397,9 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
   public String connectGroupId() {
-    if (getString(CONNECT_GROUP_ID_PROP) != null) {
-      LOG.warn(
-          "Property '{}' is deprecated and ignored. The source consumer group is derived from "
-              + "'{}', worker consumer config, or the connector name.",
-          CONNECT_GROUP_ID_PROP,
-          CONSUMER_OVERRIDE_GROUP_ID_PROP);
-    }
-
-    String connectorOverride = originalProps.get(CONSUMER_OVERRIDE_GROUP_ID_PROP);
-    if (connectorOverride != null) {
-      return connectorOverride;
-    }
-
-    String workerConsumerGroupId = kafkaProps.get(WORKER_CONSUMER_GROUP_ID_PROP);
-    if (workerConsumerGroupId != null) {
-      return workerConsumerGroupId;
+    String result = getString(CONNECT_GROUP_ID_PROP);
+    if (result != null) {
+      return result;
     }
 
     String connectorName = connectorName();
@@ -507,10 +419,6 @@ public class IcebergSinkConfig extends AbstractConfig {
     return getInt(COMMIT_THREADS_PROP);
   }
 
-  public int controlPollIntervalMs() {
-    return getInt(CONTROL_POLL_INTERVAL_MS_PROP);
-  }
-
   public String transactionalPrefix() {
     String result = getString(TRANSACTIONAL_PREFIX_PROP);
     if (result != null) {
@@ -518,57 +426,6 @@ public class IcebergSinkConfig extends AbstractConfig {
     }
 
     return "";
-  }
-
-  public List<Class<? extends Throwable>> transactionalCommitRetriableExceptionClasses() {
-    List<Class<? extends Throwable>> resolved = transactionalCommitRetriableExceptions;
-    if (resolved != null) {
-      return resolved;
-    }
-
-    synchronized (this) {
-      if (transactionalCommitRetriableExceptions == null) {
-        transactionalCommitRetriableExceptions =
-            resolveExceptionClasses(getList(TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP));
-      }
-      return transactionalCommitRetriableExceptions;
-    }
-  }
-
-  private static List<Class<? extends Throwable>> resolveExceptionClasses(List<String> names) {
-    if (names == null || names.isEmpty()) {
-      return ImmutableList.of();
-    }
-
-    ImmutableList.Builder<Class<? extends Throwable>> builder = ImmutableList.builder();
-    for (String name : names) {
-      String trimmed = name == null ? "" : name.trim();
-      if (trimmed.isEmpty()) {
-        continue;
-      }
-
-      Class<?> klass = DynClasses.builder().impl(trimmed).orNull().build();
-      if (klass == null) {
-        LOG.warn(
-            "Ignoring entry '{}' in {}: class not found on classpath",
-            trimmed,
-            TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP);
-        continue;
-      }
-
-      if (Throwable.class.isAssignableFrom(klass)) {
-        @SuppressWarnings("unchecked")
-        Class<? extends Throwable> throwableClass = (Class<? extends Throwable>) klass;
-        builder.add(throwableClass);
-      } else {
-        LOG.warn(
-            "Ignoring entry '{}' in {}: class is not a Throwable subtype",
-            trimmed,
-            TRANSACTIONAL_COMMIT_RETRIABLE_EXCEPTIONS_PROP);
-      }
-    }
-
-    return builder.build();
   }
 
   public String hadoopConfDir() {
@@ -593,14 +450,6 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public JsonConverter jsonConverter() {
     return jsonConverter;
-  }
-
-  public String errorTolerance() {
-    return getString(ERROR_TOLERANCE);
-  }
-
-  public boolean errorLogIncludeMessages() {
-    return getBoolean(ERROR_LOG_INCLUDE_MESSAGES);
   }
 
   @VisibleForTesting

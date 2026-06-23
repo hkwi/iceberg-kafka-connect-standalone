@@ -37,25 +37,15 @@ class IcebergWriter implements RecordWriter {
   private final Table table;
   private final TableReference tableReference;
   private final IcebergSinkConfig config;
-  private final ConnectorMetrics metrics;
   private final List<IcebergWriterResult> writerResults;
 
   private RecordConverter recordConverter;
   private TaskWriter<Record> writer;
 
   IcebergWriter(Table table, TableReference tableReference, IcebergSinkConfig config) {
-    this(table, tableReference, config, ConnectorMetrics.NOOP);
-  }
-
-  IcebergWriter(
-      Table table,
-      TableReference tableReference,
-      IcebergSinkConfig config,
-      ConnectorMetrics metrics) {
     this.table = table;
     this.tableReference = tableReference;
     this.config = config;
-    this.metrics = metrics;
     this.writerResults = Lists.newArrayList();
     initNewWriter();
   }
@@ -67,35 +57,21 @@ class IcebergWriter implements RecordWriter {
 
   @Override
   public void write(SinkRecord record) {
-    Record row = null;
     try {
       // ignore tombstones...
       if (record.value() != null) {
-        row = convertToRow(record);
+        Record row = convertToRow(record);
+        writer.write(row);
       }
     } catch (Exception e) {
-      metrics.recordConversionError(tableReference.identifier().toString());
-      String recordData =
-          this.config.errorLogIncludeMessages()
-              ? String.format(", record: %s", record.value().toString())
-              : "";
       throw new DataException(
           String.format(
               Locale.ROOT,
-              "An error occurred converting record, topic: %s, partition, %d, offset: %d%s",
+              "An error occurred converting record, topic: %s, partition, %d, offset: %d",
               record.topic(),
               record.kafkaPartition(),
-              record.kafkaOffset(),
-              recordData),
+              record.kafkaOffset()),
           e);
-    }
-    if (row != null) {
-      try {
-        writer.write(row);
-        metrics.recordWritten(tableReference.identifier().toString());
-      } catch (IOException e) {
-        throw new UncheckedIOException(e);
-      }
     }
   }
 
@@ -114,7 +90,6 @@ class IcebergWriter implements RecordWriter {
       SchemaUtils.applySchemaUpdates(table, updates);
       // initialize a new writer with the new schema
       initNewWriter();
-      metrics.schemaEvolved(tableReference.identifier().toString());
       // convert the row again, this time using the new table schema
       row = recordConverter.convert(record.value(), null);
     }
@@ -123,19 +98,12 @@ class IcebergWriter implements RecordWriter {
   }
 
   private void flush() {
-    long startMs = System.currentTimeMillis();
     WriteResult writeResult;
     try {
       writeResult = writer.complete();
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
-
-    int dataFileCount = writeResult.dataFiles() != null ? writeResult.dataFiles().length : 0;
-    int deleteFileCount = writeResult.deleteFiles() != null ? writeResult.deleteFiles().length : 0;
-    String tableName = tableReference.identifier().toString();
-    metrics.filesWritten(tableName, dataFileCount, deleteFileCount);
-    metrics.flushCompleted(tableName, System.currentTimeMillis() - startMs);
 
     writerResults.add(
         new IcebergWriterResult(

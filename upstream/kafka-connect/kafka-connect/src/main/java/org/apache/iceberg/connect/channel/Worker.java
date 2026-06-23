@@ -22,12 +22,6 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
@@ -39,25 +33,14 @@ import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
-import org.apache.kafka.common.errors.WakeupException;
-import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 class Worker extends Channel {
-  private static final Logger LOG = LoggerFactory.getLogger(Worker.class);
 
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
-  private final ConcurrentLinkedQueue<Envelope> controlEventQueue;
-  private final ExecutorService pollingExecutor;
-  private final AtomicBoolean running;
-  private final AtomicReference<Exception> asyncError;
-  private final Duration pollInterval;
-  private final String taskId;
 
   Worker(
       IcebergSinkConfig config,
@@ -75,69 +58,10 @@ class Worker extends Channel {
     this.config = config;
     this.context = context;
     this.sinkWriter = sinkWriter;
-    this.taskId = config.connectorName() + "-" + config.taskId();
-    this.controlEventQueue = new ConcurrentLinkedQueue<>();
-    this.pollingExecutor =
-        Executors.newSingleThreadExecutor(
-            r -> {
-              Thread thread = new Thread(r, "iceberg-worker-control-poller-" + taskId);
-              thread.setDaemon(true);
-              return thread;
-            });
-    this.running = new AtomicBoolean(false);
-    this.asyncError = new AtomicReference<>();
-    this.pollInterval = Duration.ofMillis(config.controlPollIntervalMs());
-  }
-
-  @Override
-  void start() {
-    running.set(true);
-    try {
-      pollingExecutor.execute(this::backgroundPoll);
-    } catch (RuntimeException e) {
-      running.set(false);
-      throw new ConnectException(String.format("Worker %s failed to start", taskId), e);
-    }
-
-    LOG.info(
-        "Worker {} started async control topic polling with interval {}ms",
-        taskId,
-        pollInterval.toMillis());
-  }
-
-  private void backgroundPoll() {
-    LOG.info("Worker {} control topic polling thread started", taskId);
-    try {
-      initializeConsumer();
-      while (running.get() && !Thread.currentThread().isInterrupted()) {
-        try {
-          consumeAvailable(pollInterval);
-        } catch (WakeupException e) {
-          LOG.debug("Worker {} control consumer woke up", taskId, e);
-          break;
-        }
-      }
-    } catch (Exception e) {
-      if (running.compareAndSet(true, false)) {
-        asyncError.compareAndSet(null, e);
-        LOG.error("Worker {} failed while polling control events", taskId, e);
-      }
-    } finally {
-      LOG.info("Worker {} control topic polling thread stopped", taskId);
-    }
   }
 
   void process() {
-    Exception error = asyncError.getAndSet(null);
-    if (error != null) {
-      throw new ConnectException(
-          String.format("Worker %s failed while polling control events", taskId), error);
-    }
-
-    Envelope envelope;
-    while ((envelope = controlEventQueue.poll()) != null) {
-      handleStartCommit(((StartCommit) envelope.event().payload()).commitId());
-    }
+    consumeAvailable(Duration.ZERO);
   }
 
   @Override
@@ -147,11 +71,6 @@ class Worker extends Channel {
       return false;
     }
 
-    controlEventQueue.offer(envelope);
-    return true;
-  }
-
-  private void handleStartCommit(UUID commitId) {
     SinkWriterResult results = sinkWriter.completeWrite();
 
     // include all assigned topic partitions even if no messages were read
@@ -169,6 +88,8 @@ class Worker extends Channel {
                       tp.topic(), tp.partition(), offset.offset(), offset.timestamp());
                 })
             .collect(Collectors.toList());
+
+    UUID commitId = ((StartCommit) event.payload()).commitId();
 
     List<Event> events =
         results.writerResults().stream()
@@ -188,59 +109,17 @@ class Worker extends Channel {
     events.add(readyEvent);
 
     send(events, results.sourceOffsets());
+
+    return true;
   }
 
   @Override
   void stop() {
-    RuntimeException failure = null;
-
-    try {
-      stopBackgroundPolling();
-    } catch (RuntimeException e) {
-      failure = Channel.appendFailure(failure, e);
-    }
-
-    try {
-      super.stop();
-    } catch (RuntimeException e) {
-      failure = Channel.appendFailure(failure, e);
-    }
-
-    try {
-      sinkWriter.close();
-    } catch (RuntimeException e) {
-      failure = Channel.appendFailure(failure, e);
-    }
-
-    if (failure != null) {
-      throw failure;
-    }
-  }
-
-  private void stopBackgroundPolling() {
-    running.set(false);
-    wakeupConsumer();
-    pollingExecutor.shutdownNow();
-    try {
-      if (!pollingExecutor.awaitTermination(1, TimeUnit.MINUTES)) {
-        throw new ConnectException(
-            String.format("Worker %s control polling thread did not stop", taskId));
-      }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new ConnectException(
-          String.format("Interrupted while stopping worker %s control polling thread", taskId), e);
-    } finally {
-      controlEventQueue.clear();
-      asyncError.set(null);
-    }
+    super.stop();
+    sinkWriter.close();
   }
 
   void save(Collection<SinkRecord> sinkRecords) {
     sinkWriter.save(sinkRecords);
-  }
-
-  int pendingEventCount() {
-    return controlEventQueue.size();
   }
 }
