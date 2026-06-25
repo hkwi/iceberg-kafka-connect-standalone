@@ -240,16 +240,16 @@ or refresh this overlay commit/entry accordingly.
 - Local Apache checkout commit: b2b384c78 Kafka Connect: Apply UUID schema conversion from PR #16828
 - Standalone handling: one overlay commit on top of the existing local overlay stack
 
-This overlay maps Kafka Connect schemas named `uuid` on STRING and BYTES values
-to Iceberg `UUIDType` instead of falling back to string or binary. The Apache PR
-also adds a core Avro schema conversion test; the standalone overlay carries only
-the Kafka Connect code and tests because this repository builds the connector
-modules.
+Apache Iceberg main now includes the STRING schema-name mapping from #16828. The
+remaining standalone-local part maps Kafka Connect schemas named `uuid` on BYTES
+values to Iceberg `UUIDType` instead of falling back to binary. The Apache PR
+also adds a core Avro schema conversion test; this standalone repository carries
+only the Kafka Connect modules.
 
 The standalone integration preserves the existing local `SchemaUtils` overlays,
 including #15027 `ZonedDateTime` inference and #16606 decimal inference.
 
-Refresh procedure if the PR receives more commits before merge:
+Refresh procedure if the standalone BYTES mapping is rebuilt:
 
 1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
 2. Rebuild the local `pr-16828-avro-uuid-schema` commit from the latest PR diff.
@@ -257,9 +257,9 @@ Refresh procedure if the PR receives more commits before merge:
    of the existing standalone overlays.
 4. Amend or replace the standalone #16828 overlay commit.
 
-When #16828 is merged into upstream main, run `scripts/sync-upstream.sh` from
-this repository, verify the remaining diff against the local overlays, and drop
-or refresh this overlay commit/entry accordingly.
+After syncing the Apache merge of #16828, keep this entry until the BYTES
+schema-name mapping is either accepted upstream or intentionally dropped from
+the standalone overlay stack.
 
 ## apache/iceberg#16602: Per-instance KafkaMetadataTransform configuration
 
@@ -432,7 +432,7 @@ The standalone integration preserves existing local overlays while applying this
 
 1. `SchemaUtils` keeps #15027 `ZonedDateTime` inference.
 2. `SchemaUtils` keeps #16606 decimal precision/scale normalization.
-3. `SchemaUtils` keeps #16828 UUID schema-name mapping for STRING and BYTES.
+3. `SchemaUtils` keeps the standalone-local #16828 UUID schema-name mapping for BYTES.
 4. `RecordConverter` keeps #16915 case-insensitive name mapping lookup.
 
 Refresh procedure if the PR receives more commits before merge:
@@ -681,16 +681,17 @@ This overlay resolves whether UUID values should be written as Parquet 16-byte v
 The behavior is unchanged: Parquet still receives `UUIDUtil.convert(uuid)`, while other formats keep
 the UUID value.
 
-The standalone integration applies the PR directly on top of the existing #15027/#16681/#16828 UUID
-and temporal conversion overlays. `TestRecordConverter` now defaults mocked `writeProps()` to an
-empty map, matching production where `IcebergSinkConfig.writeProps()` is never null.
+The standalone integration applies the PR directly on top of the existing #15027/#16681 temporal
+overlays and the #16828 UUID BYTES overlay. `TestRecordConverter` now defaults mocked
+`writeProps()` to an empty map, matching production where `IcebergSinkConfig.writeProps()` is never
+null.
 
 Refresh procedure if #16654 receives more commits before merge:
 
 1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
 2. Re-read PR #16654 and compare its `RecordConverter` constructor and `convertUUID` changes against
    this overlay.
-3. Preserve the local UUID conversion behavior from #16828 while refreshing this precomputed flag.
+3. Preserve the local UUID BYTES conversion behavior from #16828 while refreshing this precomputed flag.
 4. Run focused `TestRecordConverter` plus `./gradlew -q :iceberg-kafka-connect:test`.
 5. Amend or replace the standalone #16654 overlay commit.
 
