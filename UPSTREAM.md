@@ -2,5 +2,5 @@
 
 - Repository: apache/iceberg
 - Ref: main
-- Commit: 33bd1019a3544ad005979c64b73ee0a8da2d50e4
+- Commit: da8ff447a23447733ea6231625cc4d468245b090
 - Source path: kafka-connect/
