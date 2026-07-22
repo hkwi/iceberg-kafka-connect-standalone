@@ -102,7 +102,7 @@ public class ChannelTestBase {
     when(config.commitThreads()).thenReturn(1);
     when(config.connectGroupId()).thenReturn(CONNECT_CONSUMER_GROUP_ID);
     when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
-    when(config.commitMaxConsecutiveFailures()).thenReturn(3);
+    when(config.commitMaxConsecutiveFailures()).thenReturn(1);
     when(config.controlPollIntervalMs()).thenReturn(100);
 
     TopicPartitionInfo partitionInfo = mock(TopicPartitionInfo.class);

@@ -42,7 +42,12 @@ build the connector without carrying the full Apache Iceberg tree.
 This is not intended to fork the connector permanently. The normal lifecycle for
 an overlay is: evaluate an Apache PR or issue, adapt it if needed, test it here,
 keep it as a separate commit, and remove it once the equivalent change is merged
-into Apache Iceberg main.
+into Apache Iceberg main. This applies whether the tracked PR itself is merged or
+another upstream change provides the same intended behavior. The implementation
+actually merged upstream is authoritative; standalone does not merge or retain
+the superseded PR patch. If that PR remains open, `PATCHES.md` records that it is
+superseded and not applied. Any further standalone change must be tracked
+independently against a separate upstream PR or issue.
 
 ## Upstream Tracking
 
@@ -172,12 +177,16 @@ than forcing it into the stack.
 
 ## Dropping Overlays
 
-When Apache Iceberg merges a PR already carried here:
+When Apache Iceberg merges a carried PR or another change with the same intent:
 
 1. Run `scripts/sync-upstream.sh --iceberg-ref main`.
 2. Compare the local overlay diff against the new upstream source.
-3. Drop the local overlay commit if upstream now contains the same behavior.
-4. Refresh the overlay if standalone still needs an adaptation.
-5. Remove or update the corresponding `PATCHES.md` entry.
+3. Replace the overlay with the implementation actually merged upstream.
+4. Do not merge or retain the tracked PR patch, even if that PR remains open.
+5. If the tracked PR remains open, keep a metadata-only `PATCHES.md` entry that
+   names the superseding upstream change and states that the overlay is not applied.
+6. Otherwise remove the corresponding `PATCHES.md` entry.
+7. Track any further standalone change independently against a separate upstream
+   PR or issue.
 
 Keeping each overlay as its own commit is what makes this process manageable.

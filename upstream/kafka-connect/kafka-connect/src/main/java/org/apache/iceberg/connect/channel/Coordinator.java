@@ -188,7 +188,9 @@ class Coordinator extends Channel {
         return;
       }
 
-      if (!isCommitFailedException(e)) {
+      if (!(e instanceof CommitFailedException)) {
+        // CommitStateUnknownException, ValidationException, ForbiddenException,
+        // NPE, anything else -- not retryable, terminate immediately
         throw e;
       }
 
@@ -212,17 +214,6 @@ class Coordinator extends Channel {
     } finally {
       commitState.endCurrentCommit();
     }
-  }
-
-  private static boolean isCommitFailedException(Throwable throwable) {
-    Throwable current = throwable;
-    while (current != null) {
-      if (current instanceof CommitFailedException) {
-        return true;
-      }
-      current = current.getCause();
-    }
-    return false;
   }
 
   private void doCommit(boolean partialCommit) {

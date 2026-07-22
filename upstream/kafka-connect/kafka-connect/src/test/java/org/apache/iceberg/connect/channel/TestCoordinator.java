@@ -21,6 +21,8 @@ package org.apache.iceberg.connect.channel;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -29,6 +31,7 @@ import static org.mockito.Mockito.when;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DataFiles;
@@ -178,7 +181,7 @@ public class TestCoordinator extends ChannelTestBase {
         .hasMessageContaining("Glue detected concurrent update");
   }
 
-  
+  @Test
   public void testCommitBoundedRetry() {
     when(config.commitMaxConsecutiveFailures()).thenReturn(3);
     when(config.commitIntervalMs()).thenReturn(0);
@@ -196,39 +199,41 @@ public class TestCoordinator extends ChannelTestBase {
     coordinator.start();
     initConsumer();
 
+    // first two failures should not throw
     triggerCommitCycle(coordinator);
     triggerCommitCycle(coordinator);
 
+    // third consecutive failure should terminate
     assertThatThrownBy(() -> triggerCommitCycle(coordinator))
         .isInstanceOf(CommitFailedException.class)
         .hasMessageContaining("transient error");
   }
 
-  
+  @Test
   public void testCommitCounterResetsOnSuccess() {
     when(config.commitMaxConsecutiveFailures()).thenReturn(3);
     when(config.commitIntervalMs()).thenReturn(0);
     when(config.commitTimeoutMs()).thenReturn(Integer.MAX_VALUE);
 
+    // pre-populate a snapshot so latestSnapshot() is non-null after no-op commit
     table.newAppend().appendFile(EventTestUtil.createDataFile()).commit();
 
     Table spiedTable = spy(table);
     AppendFiles failingAppend = spy(table.newAppend());
-    doThrow(new CommitFailedException("transient error")).when(failingAppend).commit();
+    AtomicBoolean failCommits = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              if (failCommits.get()) {
+                throw new CommitFailedException("transient error");
+              }
+              return null;
+            })
+        .when(failingAppend)
+        .commit();
 
-    AppendFiles noOpAppend = mock(AppendFiles.class);
-    when(noOpAppend.validateWith(any())).thenReturn(noOpAppend);
-    when(noOpAppend.set(any(), any())).thenReturn(noOpAppend);
-    when(noOpAppend.toBranch(any())).thenReturn(noOpAppend);
-    when(noOpAppend.appendFile(any())).thenReturn(noOpAppend);
-
-    when(spiedTable.newAppend())
-        .thenReturn(failingAppend)
-        .thenReturn(failingAppend)
-        .thenReturn(noOpAppend)
-        .thenReturn(failingAppend)
-        .thenReturn(failingAppend)
-        .thenReturn(failingAppend);
+    // The standalone Mockito setup does not reliably advance consecutive return values on this
+    // table spy, so switch only the commit result while preserving the merged test scenario.
+    doReturn(failingAppend).when(spiedTable).newAppend();
     when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
 
     SinkTaskContext context = mock(SinkTaskContext.class);
@@ -237,19 +242,27 @@ public class TestCoordinator extends ChannelTestBase {
     coordinator.start();
     initConsumer();
 
-    triggerCommitCycle(coordinator);
-    triggerCommitCycle(coordinator);
-    triggerCommitCycle(coordinator);
+    // two failures (counter = 1, 2)
     triggerCommitCycle(coordinator);
     triggerCommitCycle(coordinator);
 
+    // success resets counter to 0
+    failCommits.set(false);
+    triggerCommitCycle(coordinator);
+
+    // two more failures — still under threshold (counter = 1, 2)
+    failCommits.set(true);
+    triggerCommitCycle(coordinator);
+    triggerCommitCycle(coordinator);
+
+    // third failure after reset — terminates (counter = 3), proving reset happened
     assertThatThrownBy(() -> triggerCommitCycle(coordinator))
         .isInstanceOf(CommitFailedException.class)
         .hasMessageContaining("transient error");
   }
 
-  
-  public void testCommitFailedExceptionCauseChainWithMultipleThreads() {
+  @Test
+  public void testCommitBoundedRetryWithMultipleThreads() {
     when(config.commitMaxConsecutiveFailures()).thenReturn(2);
     when(config.commitThreads()).thenReturn(2);
     when(config.commitIntervalMs()).thenReturn(0);
@@ -257,9 +270,7 @@ public class TestCoordinator extends ChannelTestBase {
 
     Table spiedTable = spy(table);
     AppendFiles spiedAppend = spy(table.newAppend());
-    doThrow(new RuntimeException("wrapped", new CommitFailedException("concurrent update")))
-        .when(spiedAppend)
-        .commit();
+    doThrow(new CommitFailedException("concurrent update")).when(spiedAppend).commit();
     when(spiedTable.newAppend()).thenReturn(spiedAppend);
     when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
 
@@ -269,11 +280,13 @@ public class TestCoordinator extends ChannelTestBase {
     coordinator.start();
     initConsumer();
 
+    // first failure is retried
     triggerCommitCycle(coordinator);
 
+    // second consecutive failure terminates
     assertThatThrownBy(() -> triggerCommitCycle(coordinator))
-        .isInstanceOf(RuntimeException.class)
-        .hasMessageContaining("wrapped");
+        .isInstanceOf(CommitFailedException.class)
+        .hasMessageContaining("concurrent update");
   }
 
   private long nextOffset = 1;
@@ -545,6 +558,8 @@ public class TestCoordinator extends ChannelTestBase {
 
   @Test
   public void testCoordinatorCommittedOffsetValidation() {
+    when(config.commitMaxConsecutiveFailures()).thenReturn(1);
+
     // This test demonstrates that the Coordinator's validateAndCommit method
     // prevents commits when another independent commit has updated the offsets
     // during the commit process

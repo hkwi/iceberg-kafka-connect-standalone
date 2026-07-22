@@ -72,6 +72,33 @@ public class TestRecordUtils {
   }
 
   @Test
+  public void testCreateTableWriterUsesQualifiedNameForTableConfig() {
+    org.apache.iceberg.Schema icebergSchema =
+        new org.apache.iceberg.Schema(
+            ImmutableList.of(Types.NestedField.required(1, "id", Types.LongType.get())),
+            ImmutableSet.of(1));
+
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(icebergSchema);
+    when(table.properties()).thenReturn(ImmutableMap.of());
+
+    TableSinkConfig tableConfig = mock(TableSinkConfig.class);
+    when(tableConfig.idColumns()).thenReturn(ImmutableList.of("missing_column"));
+
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.tableConfig("db.tbl")).thenReturn(tableConfig);
+    when(config.writeProps()).thenReturn(ImmutableMap.of());
+
+    TableReference tableReference =
+        TableReference.of(
+            "test_catalog", TableIdentifier.of("db", "tbl"), UUID.randomUUID());
+
+    assertThatThrownBy(() -> RecordUtils.createTableWriter(table, tableReference, config))
+        .isInstanceOf(DataException.class)
+        .hasMessageContaining("ID column 'missing_column' not found in schema");
+  }
+
+  @Test
   public void testExtractFromRecordValueStruct() {
     Schema valSchema = SchemaBuilder.struct().field("key", Schema.INT64_SCHEMA).build();
     Struct val = new Struct(valSchema).put("key", 123L);

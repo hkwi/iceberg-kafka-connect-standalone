@@ -4,6 +4,17 @@ This repository tracks `apache/iceberg` as recorded in `UPSTREAM.md`. Keep any
 not-yet-upstream changes as separate commits on top of the upstream sync commit
 so they can be refreshed or dropped cleanly.
 
+Once a carried PR, or a different change with the same intended behavior, is
+merged into `apache/iceberg`, the implementation actually merged upstream is
+authoritative. Do not merge or retain the superseded PR patch. Remove its local
+overlay, including standalone-only behavior that was not accepted upstream. If
+the superseded PR remains open, keep a metadata-only entry in this file naming
+the superseding upstream change and explicitly stating that the overlay is not
+applied.
+
+At upstream commit `f660519a4e027a30a74c08b9259ce8ce0ae87755`, no remaining
+open PR listed below is superseded by an equivalent merged upstream change.
+
 ## apache/iceberg#14618: Error handling with DLQ support
 
 - PR: https://github.com/apache/iceberg/pull/14618
@@ -69,36 +80,12 @@ When #15027 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the overlay diff is now empty or intentionally changed,
 and drop this overlay commit/entry.
 
-## apache/iceberg#16434: Bounded retry for transient commit failures
-
-- PR: https://github.com/apache/iceberg/pull/16434
-- Captured PR head commit: e9c4265b1eacd8da6da24384be3d9aaa82888ad5
-- Local Apache checkout commit: 989c9d861 Kafka Connect: Apply bounded commit retry from PR #16434
-- Standalone handling: one overlay commit on top of the #14618, #11623, and #15027 overlay commits
-
-This overlay adds `iceberg.control.commit.max-consecutive-failures`, preserving
-the default one-failure behavior while allowing operators to tolerate a bounded
-number of consecutive transient `CommitFailedException` failures.
-
-Refresh procedure if the PR receives more commits before merge:
-
-1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
-2. Rebuild the local `pr-16434-bounded-commit-retry` commit from the latest PR diff.
-3. Re-apply the config change on top of the existing standalone overlays so
-   `IcebergSinkConfig` keeps the DLQ and routing settings from earlier overlays.
-4. Copy the affected `kafka-connect/` files into `upstream/kafka-connect/` here.
-5. Amend or replace the standalone #16434 overlay commit.
-
-When #16434 is merged into upstream main, run `scripts/sync-upstream.sh` from
-this repository, verify the overlay diff is now empty or intentionally changed,
-and drop this overlay commit/entry.
-
 ## apache/iceberg#16156: Synchronous coordinator shutdown
 
 - PR: https://github.com/apache/iceberg/pull/16156
 - Captured PR head commit: 60a460783cc847cc02b81d86ffed4684263ad3c2
 - Local Apache checkout commit: 5b2c1c0d8 Kafka Connect: Apply synchronous coordinator stop from PR #16156
-- Standalone handling: one overlay commit on top of the #14618, #11623, #15027, and #16434 overlay commits
+- Standalone handling: one overlay commit on top of the existing local overlay stack
 
 This overlay joins the coordinator thread during shutdown so a revoked leader task
 finishes coordinator cleanup before another coordinator can be elected. The PR's
@@ -123,7 +110,7 @@ message context, and then drop or refresh this overlay commit/entry accordingly.
 - PR: https://github.com/apache/iceberg/pull/16366
 - Captured PR head commit: f7e62c8e87d26f236c46df1eaac89f5bade8e3be
 - Local Apache checkout commit: 1eb597e23 Kafka Connect: Apply retriable rebalance commit handling from PR #16366
-- Standalone handling: one overlay commit on top of the #14618, #11623, #15027, #16434, and #16156 overlay commits
+- Standalone handling: one overlay commit on top of the existing local overlay stack
 
 This overlay translates configured transactional producer commit failures to
 `RetriableException` so Kafka Connect can re-deliver the batch after a rebalance
@@ -136,9 +123,9 @@ The standalone integration preserves prior overlays while applying this PR:
    synchronous coordinator shutdown.
 2. `SinkWriter.close()` follows the #11623 `RecordRouter` shape and only adds
    `sourceOffsets.clear()`; there is no local `writers` map to clear.
-3. `IcebergSinkConfig` keeps the #14618 error tolerance, #11623 routing, and
-   #16434 bounded commit retry settings alongside the new retriable exception
-   list.
+3. `IcebergSinkConfig` keeps the #14618 error tolerance and #11623 routing
+   settings alongside the upstream bounded commit retry and the new retriable
+   exception list.
 
 Refresh procedure if the PR receives more commits before merge:
 
@@ -159,7 +146,7 @@ or refresh this overlay commit/entry accordingly.
 - PR: https://github.com/apache/iceberg/pull/16360
 - Captured PR head commit: e4f0164d5baa26dfebf8c169aad3a197f61df7aa
 - Local Apache checkout commit: 55e3f8340 Kafka Connect: Apply control topic reset recovery from PR #16360
-- Standalone handling: one overlay commit on top of the #14618, #11623, #15027, #16434, #16156, and #16366 overlay commits
+- Standalone handling: one overlay commit on top of the existing local overlay stack
 
 This overlay handles Kafka cluster recreation or control-topic reset scenarios
 where new control-topic offsets are lower than offsets stored in the latest
@@ -172,8 +159,8 @@ Refresh procedure if the PR receives more commits before merge:
 1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
 2. Rebuild the local `pr-16360-control-topic-reset` commit from the latest PR diff.
 3. Re-apply the `Coordinator` changes on top of the existing standalone overlays,
-   preserving #16434 bounded commit retry and #16366 retriable transactional commit
-   handling in the same class.
+   preserving upstream bounded commit retry and #16366 retriable transactional
+   commit handling in the same class.
 4. Copy or re-apply the affected `kafka-connect/` files into `upstream/kafka-connect/` here.
 5. Amend or replace the standalone #16360 overlay commit.
 
@@ -208,9 +195,12 @@ or refresh this overlay commit/entry accordingly.
 ## apache/iceberg#16606: Decimal inference for BigDecimal values
 
 - PR: https://github.com/apache/iceberg/pull/16606
-- Captured PR head commit: f61f96a196e7d3bf5ca46d58ffe244ddf3d08ebb
+- Captured PR head commit: 59c81c955ca595e8de741574a74a44ef4e4420c4
 - Local Apache checkout commit: c06287a2a Kafka Connect: Apply decimal inference fix from PR #16606
 - Standalone handling: one overlay commit on top of the existing local overlay stack
+
+The current PR diff was revalidated at the captured head and remains
+code-equivalent to the standalone decimal inference and focused tests.
 
 This overlay normalizes inferred `BigDecimal` types so values with scale larger
 than precision, such as `0.001`, become valid Iceberg decimals, and values with
@@ -232,34 +222,6 @@ Refresh procedure if the PR receives more commits before merge:
 When #16606 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
-
-## apache/iceberg#16828: UUID logical type schema conversion
-
-- PR: https://github.com/apache/iceberg/pull/16828
-- Captured PR head commit: 371bc7db8448948b8af4479c3801aaa314730aec
-- Local Apache checkout commit: b2b384c78 Kafka Connect: Apply UUID schema conversion from PR #16828
-- Standalone handling: one overlay commit on top of the existing local overlay stack
-
-Apache Iceberg main now includes the STRING schema-name mapping from #16828. The
-remaining standalone-local part maps Kafka Connect schemas named `uuid` on BYTES
-values to Iceberg `UUIDType` instead of falling back to binary. The Apache PR
-also adds a core Avro schema conversion test; this standalone repository carries
-only the Kafka Connect modules.
-
-The standalone integration preserves the existing local `SchemaUtils` overlays,
-including #15027 `ZonedDateTime` inference and #16606 decimal inference.
-
-Refresh procedure if the standalone BYTES mapping is rebuilt:
-
-1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
-2. Rebuild the local `pr-16828-avro-uuid-schema` commit from the latest PR diff.
-3. Re-apply the Kafka Connect `SchemaUtils` and `TestSchemaUtils` changes on top
-   of the existing standalone overlays.
-4. Amend or replace the standalone #16828 overlay commit.
-
-After syncing the Apache merge of #16828, keep this entry until the BYTES
-schema-name mapping is either accepted upstream or intentionally dropped from
-the standalone overlay stack.
 
 ## apache/iceberg#16602: Per-instance KafkaMetadataTransform configuration
 
@@ -432,15 +394,14 @@ The standalone integration preserves existing local overlays while applying this
 
 1. `SchemaUtils` keeps #15027 `ZonedDateTime` inference.
 2. `SchemaUtils` keeps #16606 decimal precision/scale normalization.
-3. `SchemaUtils` keeps the standalone-local #16828 UUID schema-name mapping for BYTES.
-4. `RecordConverter` keeps #16915 case-insensitive name mapping lookup.
+3. `RecordConverter` keeps #16915 case-insensitive name mapping lookup.
 
 Refresh procedure if the PR receives more commits before merge:
 
 1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
 2. Rebuild the local `pr-16681-avro-temporal-logical-types` commit from the latest PR diff.
 3. Re-apply the Kafka Connect `RecordConverter`, `SchemaUtils`, and tests on top
-   of the existing standalone overlays, preserving the four integration points listed above.
+   of the existing standalone overlays, preserving the three integration points listed above.
 4. Re-publish the Iceberg dependency artifacts from the refreshed Apache checkout if the
    core Avro read-path part is needed in local runtime builds.
 5. Amend or replace the standalone #16681 overlay commit.
@@ -467,7 +428,7 @@ The standalone integration preserves existing local channel overlays while apply
 1. `CoordinatorThread.terminate()` keeps #16843 synchronous shutdown and failure aggregation.
 2. `CommitterImpl.startWorker()` keeps #14618 errant-record reporter setup.
 3. `CommitterImpl.processControlEvents()` keeps #16366 retriable rebalance handling.
-4. `Coordinator` keeps #16360 control-topic reset recovery and #16434 bounded commit retry logic.
+4. `Coordinator` keeps #16360 control-topic reset recovery and upstream bounded commit retry logic.
 
 Refresh procedure if the PR receives more commits before merge:
 
@@ -502,7 +463,7 @@ effect, while still allowing a real control-topic reset with new commit IDs to w
 The standalone integration preserves existing local channel overlays:
 
 1. #16360 control-topic reset recovery still allows new commit IDs after a reset.
-2. #16434 bounded commit retry remains unchanged.
+2. Upstream bounded commit retry remains unchanged.
 3. #16366 retriable transactional commit handling remains unchanged.
 4. #16843 robust coordinator cleanup remains unchanged.
 
@@ -597,12 +558,32 @@ Refresh procedure if #16598 receives more commits before merge:
 When #16598 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream's
 identifier-field validation against this overlay, and drop or refresh this local commit/entry.
 
+## apache/iceberg#17152: Use fully qualified names for per-table id-columns
+
+- PR: https://github.com/apache/iceberg/pull/17152
+- Captured PR head commit: 10cd740ac09e4e2d81c7bb590ea7259cd12c5b35
+- Standalone handling: targeted local overlay on top of the #16598 identifier-field changes
+
+This overlay passes the fully qualified table identifier to `IcebergSinkConfig.tableConfig(...)`
+when resolving per-table `id-columns`. Using only the leaf table name ignored settings such as
+`iceberg.tables.db.tbl.id-columns`, causing the configured equality fields to be silently skipped.
+The standalone integration adds regression coverage for a namespaced `db.tbl` table.
+
+When #17152 is merged into upstream main, run `scripts/sync-upstream.sh`, compare upstream's final
+implementation against this overlay, and drop or refresh this local commit/entry. If an equivalent
+fix is merged through another change while #17152 remains open, do not apply #17152 and retain this
+entry as metadata-only documentation according to the policy above.
+
 ## apache/iceberg#15651/#15710: Commit stale DataWritten groups separately by commitId
 
 - PRs: https://github.com/apache/iceberg/pull/15651 and https://github.com/apache/iceberg/pull/15710
-- Captured #15651 PR head commit: 17956462cd7a073e17de9db1c8492a72ce0a8fb1
+- Captured #15651 PR head commit: ff4153a32a595efe69a1f0dbfb3091d0131a565f
 - Captured #15710 PR head commit: fdea92c42b12704dc65994fdcf91a5c805e9f730
 - Standalone handling: adapted local overlay commit on top of the existing local overlay stack
+
+The current #15651 head was re-evaluated after its retry, cleanup, JMX, and
+offset-advancement changes. The standalone overlay continues to carry only the
+commitId grouping and sequence-ordering fix described below.
 
 This overlay fixes the stale `DataWritten` partial-commit path by grouping buffered commit responses
 per table and per Kafka Connect `commitId`. A late `DataWritten` from an earlier commit cycle is now
@@ -682,18 +663,16 @@ The behavior is unchanged: Parquet still receives `UUIDUtil.convert(uuid)`, whil
 the UUID value.
 
 The standalone integration applies the PR directly on top of the existing #15027/#16681 temporal
-overlays and the #16828 UUID BYTES overlay. `TestRecordConverter` now defaults mocked
-`writeProps()` to an empty map, matching production where `IcebergSinkConfig.writeProps()` is never
-null.
+overlays. `TestRecordConverter` now defaults mocked `writeProps()` to an empty map, matching
+production where `IcebergSinkConfig.writeProps()` is never null.
 
 Refresh procedure if #16654 receives more commits before merge:
 
 1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
 2. Re-read PR #16654 and compare its `RecordConverter` constructor and `convertUUID` changes against
    this overlay.
-3. Preserve the local UUID BYTES conversion behavior from #16828 while refreshing this precomputed flag.
-4. Run focused `TestRecordConverter` plus `./gradlew -q :iceberg-kafka-connect:test`.
-5. Amend or replace the standalone #16654 overlay commit.
+3. Run focused `TestRecordConverter` plus `./gradlew -q :iceberg-kafka-connect:test`.
+4. Amend or replace the standalone #16654 overlay commit.
 
 When #16654 is merged into upstream main, run `scripts/sync-upstream.sh`, verify that the remaining
 `RecordConverter` diff is only from still-local overlays, and drop or refresh this local commit/entry.
@@ -751,8 +730,8 @@ Refresh procedure if #15961 receives more commits before merge:
 1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
 2. Re-read PR #15961 and compare its metrics facade and instrumentation points against this adapted
    overlay.
-3. Preserve local routing, DLQ, #16084 async polling, #16434 bounded retry, and #15651/#15710
-   commit grouping while refreshing metrics call sites.
+3. Preserve local routing, DLQ, #16084 async polling, upstream bounded retry, and
+   #15651/#15710 commit grouping while refreshing metrics call sites.
 4. Run `TestConnectorMetrics`, focused writer/coordinator tests, and
    `./gradlew -q :iceberg-kafka-connect:test`.
 5. Amend or replace the standalone #15961 overlay commit.
