@@ -309,10 +309,28 @@ public class TestSinkWriter {
     assertThat(added).isEqualTo(Types.DecimalType.of(3, 3));
   }
 
+  @Test
+  public void testEvolveAddsExponentialDecimalColumn() {
+    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
+    when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
+    when(config.tables()).thenReturn(ImmutableList.of(TABLE_IDENTIFIER.toString()));
+    when(config.evolveSchemaEnabled()).thenReturn(true);
+
+    // BigDecimal("1E+2") has a negative scale (-2), normalized to decimal(3, 0).
+    Map<String, Object> value = ImmutableMap.of("amount", new BigDecimal("1E+2"));
+
+    List<IcebergWriterResult> writerResults = sinkWriterTest(value, config);
+    assertThat(writerResults).isNotEmpty();
+
+    Type added = catalog.loadTable(TABLE_IDENTIFIER).schema().findType("amount");
+    assertThat(added).isEqualTo(Types.DecimalType.of(3, 0));
+  }
+
   private List<IcebergWriterResult> sinkWriterTest(
       Map<String, Object> value, IcebergSinkConfig config) {
     return sinkWriterTest(value, config, null);
   }
+
 
   private List<IcebergWriterResult> sinkWriterTest(
       Map<String, Object> value, IcebergSinkConfig config, ErrantRecordReporter reporter) {

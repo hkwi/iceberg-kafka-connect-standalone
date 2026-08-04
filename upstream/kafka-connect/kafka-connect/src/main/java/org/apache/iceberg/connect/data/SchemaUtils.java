@@ -85,6 +85,7 @@ class SchemaUtils {
   static final String AVRO_LOCAL_TIMESTAMP_MICROS = "local-timestamp-micros";
   static final String AVRO_LOCAL_TIMESTAMP_NANOS = "local-timestamp-nanos";
   static final String AVRO_TIME_MICROS = "time-micros";
+  private static final int MAX_DECIMAL_PRECISION = 38;
 
   static PrimitiveType needsDataTypeUpdate(Type currentIcebergType, Schema valueSchema) {
     if (currentIcebergType.typeId() == TypeID.FLOAT && valueSchema.type() == Schema.Type.FLOAT64) {
@@ -250,6 +251,8 @@ class SchemaUtils {
           if (Decimal.LOGICAL_NAME.equals(valueSchema.name())) {
             int scale = Integer.parseInt(valueSchema.parameters().get(Decimal.SCALE_FIELD));
             return DecimalType.of(38, scale);
+          } else if ("uuid".equals(valueSchema.name())) {
+            return UUIDType.get();
           }
           return BinaryType.get();
         case INT8:
@@ -329,16 +332,7 @@ class SchemaUtils {
       } else if (value instanceof Boolean) {
         return BooleanType.get();
       } else if (value instanceof BigDecimal) {
-        BigDecimal bigDecimal = (BigDecimal) value;
-        int scale = bigDecimal.scale();
-        int precision = bigDecimal.precision();
-        // BigDecimal may use a negative scale (e.g. "1E+2" has scale -2)
-        if (scale < 0) {
-          precision -= scale;
-          scale = 0;
-        }
-        // a value < 1 may have precision < scale (e.g. "0.001"); widen precision to the scale
-        return DecimalType.of(Math.max(precision, scale), scale);
+        return inferDecimalType((BigDecimal) value);
       } else if (value instanceof Integer || value instanceof Long) {
         return LongType.get();
       } else if (value instanceof Float || value instanceof Double) {
@@ -381,6 +375,20 @@ class SchemaUtils {
       } else {
         return null;
       }
+    }
+
+    private static Type inferDecimalType(BigDecimal value) {
+      long scale = value.scale();
+      long precision = value.precision();
+      if (scale < 0) {
+        precision -= scale;
+        scale = 0;
+      }
+      precision = Math.max(precision, scale);
+      if (precision > MAX_DECIMAL_PRECISION) {
+        return null;
+      }
+      return DecimalType.of((int) precision, (int) scale);
     }
 
     private int nextId() {
