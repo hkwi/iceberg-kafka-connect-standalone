@@ -1,4 +1,4 @@
-# Local Overlay Patches
+# Local Overlay Patches (audited against apache/iceberg 58d5c3704f1ea55a38383d10e2bfbb947d968b3f)
 
 This repository tracks `apache/iceberg` as recorded in `UPSTREAM.md`. Keep any
 not-yet-upstream changes as separate commits on top of the upstream sync commit
@@ -12,8 +12,12 @@ the superseded PR remains open, keep a metadata-only entry in this file naming
 the superseding upstream change and explicitly stating that the overlay is not
 applied.
 
-At upstream commit `f660519a4e027a30a74c08b9259ce8ce0ae87755`, no remaining
-open PR listed below is superseded by an equivalent merged upstream change.
+At upstream commit `58d5c3704f1ea55a38383d10e2bfbb947d968b3f`, this tracking set was audited against apache/iceberg main on 2026-08-04.
+
+The upstream sync now owns the implementations of #16434 and #16606; their
+standalone overlays are not active. The current standalone-only functional additions
+are #16681, #17079, and #17080, each retained as a separately reviewable change.
+
 
 ## apache/iceberg#14618: Error handling with DLQ support
 
@@ -192,36 +196,13 @@ When #16915 is merged into upstream main, run `scripts/sync-upstream.sh` from
 this repository, verify the remaining diff against the local overlays, and drop
 or refresh this overlay commit/entry accordingly.
 
-## apache/iceberg#16606: Decimal inference for BigDecimal values
+## apache/iceberg#16606: Decimal inference for BigDecimal values (merged upstream)
 
 - PR: https://github.com/apache/iceberg/pull/16606
-- Captured PR head commit: 59c81c955ca595e8de741574a74a44ef4e4420c4
-- Local Apache checkout commit: c06287a2a Kafka Connect: Apply decimal inference fix from PR #16606
-- Standalone handling: one overlay commit on top of the existing local overlay stack
+- Upstream merge commit: 43c54367627fd1d59fbda03010318af75c711ea2
+- Status: metadata-only; the implementation is supplied by apache/iceberg main.
 
-The current PR diff was revalidated at the captured head and remains
-code-equivalent to the standalone decimal inference and focused tests.
-
-This overlay normalizes inferred `BigDecimal` types so values with scale larger
-than precision, such as `0.001`, become valid Iceberg decimals, and values with
-negative scale, such as `1E+2`, are represented as scale 0 decimals. This avoids
-schema evolution creating invalid decimal types that later fail writes.
-
-The standalone integration applies only the targeted decimal inference and tests
-so existing local overlays are preserved, including #15027 `ZonedDateTime` type
-inference in `SchemaUtils` and the #14618/#11623 `TestSinkWriter` coverage.
-
-Refresh procedure if the PR receives more commits before merge:
-
-1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
-2. Rebuild the local `pr-16606-decimal-inference` commit from the latest PR diff.
-3. Re-apply the affected `SchemaUtils` and test changes on top of the existing
-   standalone overlays, preserving `ZonedDateTime` inference and prior SinkWriter tests.
-4. Amend or replace the standalone #16606 overlay commit.
-
-When #16606 is merged into upstream main, run `scripts/sync-upstream.sh` from
-this repository, verify the remaining diff against the local overlays, and drop
-or refresh this overlay commit/entry accordingly.
+The standalone decimal inference overlay was superseded by the upstream merge and is no longer applied separately.
 
 ## apache/iceberg#16602: Per-instance KafkaMetadataTransform configuration
 
@@ -651,32 +632,13 @@ When #15969 is merged into upstream main, run `scripts/sync-upstream.sh`, compar
 property semantics, and drop or refresh this local commit/entry accordingly.
 
 
-## apache/iceberg#16654: Precompute UUID-as-bytes conversion flag
+## apache/iceberg#16654: Precompute UUID-as-bytes conversion flag (superseded)
 
 - PR: https://github.com/apache/iceberg/pull/16654
-- Captured PR head commit: 6cf967833f4ac7b49915cb29d31882a12266f340
-- Standalone handling: local overlay commit on top of the existing local overlay stack
+- Superseded by: https://github.com/apache/iceberg/pull/17079
+- Status: metadata-only; the UUID-as-bytes behavior is not applied.
 
-This overlay resolves whether UUID values should be written as Parquet 16-byte values once when a
-`RecordConverter` is constructed instead of recomputing the file-format check for every UUID value.
-The behavior is unchanged: Parquet still receives `UUIDUtil.convert(uuid)`, while other formats keep
-the UUID value.
-
-The standalone integration applies the PR directly on top of the existing #15027/#16681 temporal
-overlays. `TestRecordConverter` now defaults mocked `writeProps()` to an empty map, matching
-production where `IcebergSinkConfig.writeProps()` is never null.
-
-Refresh procedure if #16654 receives more commits before merge:
-
-1. Update `/home/ubuntu/iceberg/apache-iceberg` from `apache/iceberg` main.
-2. Re-read PR #16654 and compare its `RecordConverter` constructor and `convertUUID` changes against
-   this overlay.
-3. Run focused `TestRecordConverter` plus `./gradlew -q :iceberg-kafka-connect:test`.
-4. Amend or replace the standalone #16654 overlay commit.
-
-When #16654 is merged into upstream main, run `scripts/sync-upstream.sh`, verify that the remaining
-`RecordConverter` diff is only from still-local overlays, and drop or refresh this local commit/entry.
-
+The original optimization preserved a Parquet byte-array conversion that is incompatible with the current Parquet UUID writer. The standalone implementation now follows #17079 and returns UUID values directly.
 
 ## apache/iceberg#16658: Single-pass JsonToMap array uniformity checks
 
@@ -830,3 +792,23 @@ Refresh procedure if #16917 receives more commits before merge:
 
 When #16917 is merged into upstream main, run `scripts/sync-upstream.sh`, verify
 this comment-only diff is empty, and drop this local commit/entry.
+
+## apache/iceberg#17079: Fix UUID conversion for Parquet writes
+
+- PR: https://github.com/apache/iceberg/pull/17079
+- Captured PR head commit: b2d290a8ffe2a86bc6f57de660b1dfb88380a68a
+- Standalone handling: one overlay on top of the latest upstream sync
+
+Parquet UUID writers expect java.util.UUID and perform the physical byte conversion themselves. This overlay removes the stale byte-array conversion from RecordConverter and adds a regression test.
+
+Refresh or remove this overlay when an equivalent change is merged into apache/iceberg main.
+
+## apache/iceberg#17080: Exclude zombie commitId from validThroughTs()
+
+- PR: https://github.com/apache/iceberg/pull/17080
+- Captured PR head commit: dbedc44292dcdf149cb603f1dc9ed0db43b8c16b
+- Standalone handling: one overlay on top of the latest upstream sync
+
+This overlay filters ready DataComplete events by the current commitId before calculating VALID_THROUGH_TS_SNAPSHOT_PROP, preventing zombie coordinators from suppressing or rewinding the timestamp.
+
+Refresh or remove this overlay when an equivalent change is merged into apache/iceberg main.
