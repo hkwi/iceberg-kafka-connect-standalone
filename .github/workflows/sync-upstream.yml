@@ -45,6 +45,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test upstream sync script
+        run: scripts/test-sync-upstream.sh
+
       - name: Sync Apache Iceberg Kafka Connect sources
         run: |
           ref="${{ inputs['iceberg-ref'] || 'main' }}"

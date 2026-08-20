@@ -125,7 +125,16 @@ if [[ -n "${current_upstream_commit}" ]] && git -C "${iceberg_dir}" cat-file -e 
     -e 's# b/kafka-connect/# b/upstream/kafka-connect/#g' \
     -- "${patch_file}" > "${mapped_patch_file}"
 
-  git -C "${repo_root}" apply --3way --binary "${mapped_patch_file}"
+  # The patch base blobs may exist only in the upstream repository. Expose them so --3way can
+  # merge upstream changes around standalone overlays instead of falling back to context matching.
+  iceberg_object_dir="$(git -C "${iceberg_dir}" rev-parse --path-format=absolute --git-path objects)"
+  alternate_object_dirs="${iceberg_object_dir}"
+  if [[ -n "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ]]; then
+    alternate_object_dirs="${alternate_object_dirs}:${GIT_ALTERNATE_OBJECT_DIRECTORIES}"
+  fi
+
+  GIT_ALTERNATE_OBJECT_DIRECTORIES="${alternate_object_dirs}" \
+    git -C "${repo_root}" apply --3way --binary "${mapped_patch_file}"
 else
   rsync -a --delete --exclude build/ --exclude bin/ --exclude .gradle/ "${iceberg_dir}/kafka-connect/" "${repo_root}/upstream/kafka-connect/"
   rsync -a --delete "${iceberg_dir}/gradle/wrapper/" "${repo_root}/gradle/wrapper/"
