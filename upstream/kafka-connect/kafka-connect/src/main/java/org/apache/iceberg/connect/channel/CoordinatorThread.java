@@ -18,6 +18,8 @@
  */
 package org.apache.iceberg.connect.channel;
 
+import org.apache.kafka.common.errors.InvalidProducerEpochException;
+import org.apache.kafka.common.errors.ProducerFencedException;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +30,7 @@ class CoordinatorThread extends Thread {
 
   private final Coordinator coordinator;
   private volatile boolean terminated;
+  private volatile Throwable error;
 
   CoordinatorThread(Coordinator coordinator, String connectorName) {
     super("iceberg-coord-" + connectorName);
@@ -40,6 +43,7 @@ class CoordinatorThread extends Thread {
       coordinator.start();
     } catch (Exception e) {
       LOG.error("Coordinator error during start, exiting thread", e);
+      this.error = e;
       this.terminated = true;
     }
 
@@ -48,6 +52,7 @@ class CoordinatorThread extends Thread {
         coordinator.process();
       } catch (Exception e) {
         LOG.error("Coordinator error during process, exiting thread", e);
+        this.error = e;
         this.terminated = true;
       }
     }
@@ -61,6 +66,19 @@ class CoordinatorThread extends Thread {
 
   boolean isTerminated() {
     return terminated;
+  }
+
+  Throwable error() {
+    return error;
+  }
+
+  /**
+   * Whether the coordinator terminated because a newer coordinator reused its {@code
+   * transactional.id} and bumped the producer epoch, fencing this one.
+   */
+  boolean isFenced() {
+    return error instanceof ProducerFencedException
+        || error instanceof InvalidProducerEpochException;
   }
 
   void terminate() {
