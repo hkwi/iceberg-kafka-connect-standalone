@@ -108,7 +108,12 @@ class Coordinator extends Channel {
       SinkTaskContext context,
       ConnectorMetrics metrics) {
     // pass consumer group ID to which we commit low watermark offsets
-    super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
+    super(
+        config.connectGroupId() + "-coord",
+        config.coordinatorTransactionalId(),
+        config,
+        clientFactory,
+        context);
 
     this.catalog = catalog;
     this.config = config;

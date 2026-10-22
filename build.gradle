@@ -18,7 +18,9 @@
  */
 
 ext {
-  icebergVersion = findProperty('icebergVersion') ?: '1.12.0-SNAPSHOT'
+  // Default to the mainline snapshot so synced upstream-main code (which may reference
+  // APIs not yet in a release) compiles. Override with -PicebergVersion for release builds.
+  icebergVersion = findProperty('icebergVersion') ?: '1.13.0-SNAPSHOT'
   avroVersion = '1.12.1'
   awaitilityVersion = '4.3.0'
   awsSdkVersion = '2.46.10'
@@ -45,6 +47,16 @@ allprojects {
   repositories {
     mavenCentral()
     mavenLocal()
+    // Apache Iceberg SNAPSHOT artifacts live in the Apache snapshots repository.
+    if (icebergVersion.endsWith('-SNAPSHOT')) {
+      maven {
+        url 'https://repository.apache.org/content/repositories/snapshots'
+        metadataSources {
+          mavenPom()
+          artifact()
+        }
+      }
+    }
   }
 }
 
