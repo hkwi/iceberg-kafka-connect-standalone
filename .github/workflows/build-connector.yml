@@ -28,7 +28,7 @@ on:
       iceberg-version:
         description: Iceberg artifact version to use for the standalone runtime build
         required: true
-        default: '1.11.0'
+        default: '1.13.0-SNAPSHOT'
 
 permissions:
   contents: write
@@ -52,7 +52,7 @@ jobs:
       - name: Select Iceberg artifact version
         id: iceberg-version
         run: |
-          version="${{ inputs['iceberg-version'] || '1.11.0' }}"
+          version="${{ inputs['iceberg-version'] || '1.13.0-SNAPSHOT' }}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Build connector distributions

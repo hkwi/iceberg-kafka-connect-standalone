@@ -30,7 +30,7 @@ on:
       iceberg-version:
         description: Iceberg artifact version to use for validating the synced connector build
         required: true
-        default: '1.11.0'
+        default: '1.13.0-SNAPSHOT'
 
 permissions:
   contents: write
@@ -103,7 +103,7 @@ jobs:
       - name: Build connector distributions from sync result
         if: steps.changes.outputs.changed == 'true' && steps.conflicts.outputs.conflicts == 'false'
         run: |
-          version="${{ inputs['iceberg-version'] || '1.11.0' }}"
+          version="${{ inputs['iceberg-version'] || '1.13.0-SNAPSHOT' }}"
           ./gradlew \
             -PicebergVersion="${version}" \
             :iceberg-kafka-connect-runtime:distZip \
