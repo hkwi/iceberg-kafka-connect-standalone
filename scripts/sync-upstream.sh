@@ -125,16 +125,60 @@ if [[ -n "${current_upstream_commit}" ]] && git -C "${iceberg_dir}" cat-file -e 
     -e 's# b/kafka-connect/# b/upstream/kafka-connect/#g' \
     -- "${patch_file}" > "${mapped_patch_file}"
 
-  # The patch base blobs may exist only in the upstream repository. Expose them so --3way can
-  # merge upstream changes around standalone overlays instead of falling back to context matching.
+  # The patch's base and new blobs may exist only in the upstream repository. Expose them so
+  # --3way can merge upstream changes around standalone overlays instead of falling back to
+  # context matching.
   iceberg_object_dir="$(git -C "${iceberg_dir}" rev-parse --path-format=absolute --git-path objects)"
   alternate_object_dirs="${iceberg_object_dir}"
   if [[ -n "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ]]; then
     alternate_object_dirs="${alternate_object_dirs}:${GIT_ALTERNATE_OBJECT_DIRECTORIES}"
   fi
 
-  GIT_ALTERNATE_OBJECT_DIRECTORIES="${alternate_object_dirs}" \
-    git -C "${repo_root}" apply --3way --binary "${mapped_patch_file}"
+  # Import the blobs the patch references (old and new) into this repository. git apply --3way
+  # does not copy objects it reads through GIT_ALTERNATE_OBJECT_DIRECTORIES, so on a three-way
+  # conflict the index would keep a stage-3 entry pointing at a blob that only exists upstream.
+  # Once the alternate reference is gone the blob is dangling and the conflict cannot be
+  # resolved. We copy every referenced blob (old and new) into this repository so all three
+  # merge sides are self-contained. The id list is parsed with a single-quoted Python -c
+  # program because POSIX awk/grep treat the double-dot in the index field inconsistently
+  # across implementations, and a -c argument does not compete with the shell for stdin.
+  patch_blob_list="$(python3 -c '
+import sys
+path = sys.argv[1]
+with open(path, "r", errors="replace") as fh:
+    for line in fh:
+        parts = line.split()
+        if len(parts) < 2 or parts[0] != "index":
+            continue
+        # "old..new" splits into [old, "", new] because the two dots are adjacent.
+        ids = [i for i in parts[1].split(".") if i]
+        if len(ids) != 2:
+            continue
+        for i in ids:
+            # Skip the all-zero id (000000000 or 0) used for absent files.
+            if set(i) != {"0"}:
+                print(i)
+' "${mapped_patch_file}")"
+  if [[ -n "${patch_blob_list}" ]]; then
+    while read -r blob_sha; do
+      [[ -n "${blob_sha}" ]] || continue
+      if ! git -C "${repo_root}" cat-file -e "${blob_sha}^{blob}" 2>/dev/null; then
+        GIT_ALTERNATE_OBJECT_DIRECTORIES="${alternate_object_dirs}" \
+          git -C "${repo_root}" cat-file blob "${blob_sha}" \
+          | git -C "${repo_root}" hash-object -w --stdin >/dev/null
+      fi
+    done <<< "${patch_blob_list}"
+  fi
+
+  if ! GIT_ALTERNATE_OBJECT_DIRECTORIES="${alternate_object_dirs}" \
+      git -C "${repo_root}" apply --3way --binary "${mapped_patch_file}"; then
+    # A genuine three-way conflict: the standalone overlay and upstream changed the same
+    # lines. Keep the unmerged files (with conflict markers) in the working tree so the sync
+    # pull request surfaces them for manual resolution; the workflow skips the connector
+    # build while conflicts remain.
+    echo "Upstream sync left unresolved three-way conflicts:"
+    git -C "${repo_root}" diff --name-only --diff-filter=U
+  fi
 else
   rsync -a --delete --exclude build/ --exclude bin/ --exclude .gradle/ "${iceberg_dir}/kafka-connect/" "${repo_root}/upstream/kafka-connect/"
   rsync -a --delete "${iceberg_dir}/gradle/wrapper/" "${repo_root}/gradle/wrapper/"

@@ -62,6 +62,15 @@ jobs:
             echo "changed=true" >> "${GITHUB_OUTPUT}"
           fi
 
+      - name: Detect unresolved three-way sync conflicts
+        id: conflicts
+        run: |
+          if [[ -n "$(git diff --name-only --diff-filter=U)" ]]; then
+            echo "conflicts=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "conflicts=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Open sync pull request
         if: steps.changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
@@ -81,18 +90,18 @@ jobs:
             the proposed sync result and uploads them as workflow artifacts.
 
       - name: Set up Java for sync artifact build
-        if: steps.changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true' && steps.conflicts.outputs.conflicts == 'false'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle for sync artifact build
-        if: steps.changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true' && steps.conflicts.outputs.conflicts == 'false'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build connector distributions from sync result
-        if: steps.changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true' && steps.conflicts.outputs.conflicts == 'false'
         run: |
           version="${{ inputs['iceberg-version'] || '1.11.0' }}"
           ./gradlew \
@@ -101,7 +110,7 @@ jobs:
             :iceberg-kafka-connect-runtime:hiveDistZip
 
       - name: Upload synced connector zip files
-        if: steps.changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true' && steps.conflicts.outputs.conflicts == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: iceberg-kafka-connect-runtime-sync-${{ github.run_id }}
