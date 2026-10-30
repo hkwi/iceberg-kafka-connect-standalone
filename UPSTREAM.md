@@ -1,6 +1,6 @@
 # Upstream Apache Iceberg Snapshot
 
 - Repository: apache/iceberg
-- Ref: origin/main
-- Commit: cdeb84d341631b0c89a4defc61f38eccf5768cea
+- Ref: main
+- Commit: be2528185a1d37e6590bce193c2760202d90a0cb
 - Source path: kafka-connect/
